@@ -1,4 +1,3 @@
-tradingkit==1.11.8
 ccxt==4.5.73
 pandas>=2.0.0
 numpy>=1.24.0
