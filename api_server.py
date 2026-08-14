@@ -225,6 +225,48 @@ def manual_sell():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/bot/settings', methods=['POST'])
+def update_settings():
+    """Update trading settings (symbol and volatility multiplier)"""
+    global strategy_instance
+    global bot_running
+    
+    data = request.json
+    new_symbol = data.get('symbol')
+    new_volatility = data.get('volatility_multiplier')
+    
+    if not new_symbol or not new_volatility:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    try:
+        # Stop bot if running
+        if bot_running:
+            bot_running = False
+        
+        # Update .env file
+        env_path = '.env'
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            with open(env_path, 'w') as f:
+                for line in lines:
+                    if line.startswith('SYMBOL='):
+                        f.write(f'SYMBOL={new_symbol}\n')
+                    elif line.startswith('VOLATILITY_MULTIPLIER='):
+                        f.write(f'VOLATILITY_MULTIPLIER={new_volatility}\n')
+                    else:
+                        f.write(line)
+        
+        # Update strategy volatility multiplier if it exists
+        if strategy_instance:
+            strategy_instance.VOLATILITY_MULTIPLIER = float(new_volatility)
+            strategy_instance.symbol = new_symbol
+        
+        return jsonify({'success': True, 'message': 'Settings updated'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/bot/reset', methods=['POST'])
 def reset_bot():
     global strategy_instance

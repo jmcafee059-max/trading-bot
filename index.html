@@ -82,25 +82,53 @@
 </head>
 <body class="min-h-screen text-white p-6">
     <div class="max-w-7xl mx-auto">
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-8">
-            <div>
-                <h1 class="text-4xl font-bold mb-2">
-                    <i class="fas fa-robot text-green-500 mr-3"></i>
-                    Trading Bot
-                </h1>
-                <p class="text-gray-400 text-lg">Automated Cryptocurrency Trading</p>
-            </div>
-            <div class="flex items-center gap-4">
-                <div class="flex items-center gap-3 px-6 py-3 rounded-xl bg-gray-800">
-                    <div id="statusDot" class="w-4 h-4 rounded-full bg-red-500"></div>
-                    <span id="statusText" class="text-lg font-semibold">Stopped</span>
+        <!-- Control Buttons (Mobile Optimized) -->
+        <div class="grid grid-cols-1 gap-4 mb-6">
+            <button id="startBotBtn" onclick="toggleBot()" class="card p-6 text-center btn-primary text-2xl font-bold">
+                <i class="fas fa-play mr-3"></i><span id="startBotText">Start Bot</span>
+            </button>
+            <button id="manualSellBtn" onclick="manualSell()" class="card p-6 text-center btn-danger text-2xl font-bold hidden">
+                <i class="fas fa-hand-paper mr-3"></i>Manual Sell <span id="manualSellProfit" class="text-xl">(0.00%)</span>
+            </button>
+        </div>
+
+        <!-- Trading Settings -->
+        <div class="card p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4">
+                <i class="fas fa-cog text-gray-400 mr-2"></i>Trading Settings
+            </h2>
+            <div class="grid grid-cols-1 gap-4">
+                <div>
+                    <label class="label mb-2 block">Trading Pair</label>
+                    <select id="tradingPair" class="input-field">
+                        <optgroup label="🔥 High Volatility">
+                            <option value="SAND/USDT">SAND/USDT (The Sandbox)</option>
+                            <option value="UNI/USDT">UNI/USDT (Uniswap)</option>
+                            <option value="ATOM/USDT">ATOM/USDT (Cosmos)</option>
+                            <option value="AAVE/USDT">AAVE/USDT (Aave)</option>
+                            <option value="MANA/USDT">MANA/USDT (Decentraland)</option>
+                        </optgroup>
+                        <optgroup label="📊 Normal Volatility">
+                            <option value="BTC/USDT">BTC/USDT (Bitcoin)</option>
+                            <option value="ETH/USDT">ETH/USDT (Ethereum)</option>
+                            <option value="SOL/USDT">SOL/USDT (Solana)</option>
+                            <option value="BNB/USDT">BNB/USDT (Binance)</option>
+                            <option value="XRP/USDT">XRP/USDT (Ripple)</option>
+                            <option value="DOGE/USDT">DOGE/USDT (Dogecoin)</option>
+                        </optgroup>
+                    </select>
                 </div>
-                <button id="startBotBtn" onclick="toggleBot()" class="btn-primary text-lg">
-                    <i class="fas fa-play mr-2"></i>Start Bot
-                </button>
-                <button id="manualSellBtn" onclick="manualSell()" class="btn-danger text-lg hidden">
-                    <i class="fas fa-hand-paper mr-2"></i>Manual Sell <span id="manualSellProfit">(0.00%)</span>
+                <div>
+                    <label class="label mb-2 block">Volatility Multiplier: <span id="volatilityValue">20x</span></label>
+                    <input type="range" id="volatilityMultiplier" min="1" max="50" value="20" class="w-full h-3 bg-gray-700 rounded-lg appearance-none cursor-pointer" oninput="updateVolatilityDisplay()">
+                    <div class="flex justify-between text-sm text-gray-400 mt-1">
+                        <span>1x</span>
+                        <span>25x</span>
+                        <span>50x</span>
+                    </div>
+                </div>
+                <button onclick="saveSettings()" class="btn-primary w-full text-lg">
+                    <i class="fas fa-save mr-2"></i>Save Settings
                 </button>
             </div>
         </div>
@@ -300,6 +328,38 @@
                 text.textContent = 'Stopped';
                 btn.innerHTML = '<i class="fas fa-play mr-2"></i>Start Bot';
                 btn.className = 'btn-primary text-lg';
+            }
+        }
+
+        function updateVolatilityDisplay() {
+            const value = document.getElementById('volatilityMultiplier').value;
+            document.getElementById('volatilityValue').textContent = value + 'x';
+        }
+
+        async function saveSettings() {
+            const tradingPair = document.getElementById('tradingPair').value;
+            const volatilityMultiplier = document.getElementById('volatilityMultiplier').value;
+            
+            try {
+                const response = await fetch('/api/bot/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: tradingPair,
+                        volatility_multiplier: parseInt(volatilityMultiplier)
+                    })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Settings saved successfully! Bot will restart with new settings.');
+                    location.reload();
+                } else {
+                    alert('Failed to save settings');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to save settings');
             }
         }
 
