@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Trading Bot Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0a0f;
+        }
+        .card {
+            background: #1a1a2e;
+            border: 1px solid #2a2a4e;
+            border-radius: 16px;
+        }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+        .label {
+            font-size: 0.875rem;
+            color: #8888aa;
+            font-weight: 500;
+        }
+        .btn-primary {
+            background: #22c55e;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary:hover {
+            background: #16a34a;
+        }
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        .input-field {
+            background: #2a2a4e;
+            border: 1px solid #3a3a6e;
+            border-radius: 8px;
+            padding: 12px;
+            color: white;
+            font-size: 1rem;
+            width: 100%;
+        }
+        .input-field:focus {
+            outline: none;
+            border-color: #60a5fa;
+        }
+        .log-entry {
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 4px;
+            font-size: 0.9rem;
+        }
+        .trade-item {
+            background: #2a2a4e;
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-white p-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-4xl font-bold mb-2">
+                    <i class="fas fa-robot text-green-500 mr-3"></i>
+                    Trading Bot
+                </h1>
+                <p class="text-gray-400 text-lg">Automated Cryptocurrency Trading</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-3 px-6 py-3 rounded-xl bg-gray-800">
+                    <div id="statusDot" class="w-4 h-4 rounded-full bg-red-500"></div>
+                    <span id="statusText" class="text-lg font-semibold">Stopped</span>
+                </div>
+                <button id="startBotBtn" onclick="toggleBot()" class="btn-primary text-lg">
+                    <i class="fas fa-play mr-2"></i>Start Bot
+                </button>
+                <button id="manualSellBtn" onclick="manualSell()" class="btn-danger text-lg hidden">
+                    <i class="fas fa-hand-paper mr-2"></i>Manual Sell <span id="manualSellProfit">(0.00%)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="card p-6">
+                <div class="label mb-2">Current Capital</div>
+                <div id="capitalValue" class="stat-value text-green-400">$18.00</div>
+                <div id="profitLoss" class="text-lg text-gray-400 mt-2">+$0.00 (0.00%)</div>
+            </div>
+            <div class="card p-6">
+                <div class="label mb-2">Total Trades</div>
+                <div id="tradesValue" class="stat-value text-blue-400">0</div>
+                <div id="winRate" class="text-lg text-gray-400 mt-2">Win Rate: 0%</div>
+            </div>
+            <div class="card p-6">
+                <div class="label mb-2">Current Position</div>
+                <div id="positionValue" class="stat-value text-purple-400">None</div>
+                <div id="streakValue" class="text-lg text-gray-400 mt-2">Streak: 0W/0L</div>
+            </div>
+        </div>
+
+        <!-- Secondary Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="card p-4">
+                <div class="label mb-1">Best Trade</div>
+                <div id="bestTrade" class="text-2xl font-bold text-green-400">$0.00</div>
+            </div>
+            <div class="card p-4">
+                <div class="label mb-1">Worst Trade</div>
+                <div id="worstTrade" class="text-2xl font-bold text-red-400">$0.00</div>
+            </div>
+            <div class="card p-4">
+                <div class="label mb-1">Volatility</div>
+                <div id="volatility" class="text-2xl font-bold text-yellow-400">5.00x</div>
+            </div>
+            <div class="card p-4">
+                <div class="label mb-1">Trading Pair</div>
+                <div id="symbol" class="text-2xl font-bold text-cyan-400">BTC/USDC</div>
+            </div>
+        </div>
+
+        <!-- Configuration & Trades -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Configuration -->
+            <div class="card p-6">
+                <h2 class="text-2xl font-bold mb-6">
+                    <i class="fas fa-cog text-gray-400 mr-2"></i>Configuration
+                </h2>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="label mb-2 block">RSI Period</label>
+                        <input type="number" id="rsiPeriod" value="2" class="input-field">
+                    </div>
+                    <div>
+                        <label class="label mb-2 block">RSI Overbought</label>
+                        <input type="number" id="rsiOverbought" value="75" class="input-field">
+                    </div>
+                    <div>
+                        <label class="label mb-2 block">RSI Oversold</label>
+                        <input type="number" id="rsiOversold" value="25" class="input-field">
+                    </div>
+                    <div>
+                        <label class="label mb-2 block">Take Profit %</label>
+                        <input type="number" step="0.1" id="takeProfit" value="7" class="input-field">
+                    </div>
+                    <div>
+                        <label class="label mb-2 block">Stop Loss %</label>
+                        <input type="number" step="0.1" id="stopLoss" value="1" class="input-field">
+                    </div>
+                    <div>
+                        <label class="label mb-2 block">Capital %</label>
+                        <input type="number" id="capitalPercent" value="90" class="input-field">
+                    </div>
+                </div>
+                <button onclick="saveConfig()" class="btn-primary w-full mt-6 text-lg">
+                    <i class="fas fa-save mr-2"></i>Save Configuration
+                </button>
+            </div>
+
+            <!-- Trade History -->
+            <div class="card p-6">
+                <h2 class="text-2xl font-bold mb-6">
+                    <i class="fas fa-history text-gray-400 mr-2"></i>Recent Trades
+                </h2>
+                <div id="tradeHistory" class="max-h-80 overflow-y-auto">
+                    <div class="text-gray-400 text-center py-8 text-lg">No trades yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Chart -->
+        <div class="card p-6 mb-8">
+            <h2 class="text-2xl font-bold mb-6">
+                <i class="fas fa-chart-line text-gray-400 mr-2"></i>Performance Chart
+            </h2>
+            <canvas id="performanceChart" height="120"></canvas>
+        </div>
+
+        <!-- Live Logs -->
+        <div class="card p-6 mb-8">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-2xl font-bold">
+                    <i class="fas fa-terminal text-gray-400 mr-2"></i>Live Logs
+                </h2>
+                <button onclick="clearLogs()" class="text-gray-400 hover:text-white text-lg">
+                    <i class="fas fa-trash-alt mr-2"></i>Clear
+                </button>
+            </div>
+            <div id="logContainer" class="bg-black rounded-xl p-4 h-64 overflow-y-auto font-mono text-sm">
+                <div class="text-gray-500">Waiting for logs...</div>
+            </div>
+        </div>
+
+        <!-- Reset Button -->
+        <div class="flex justify-center">
+            <button onclick="resetBot()" class="btn-danger text-lg">
+                <i class="fas fa-trash-alt mr-2"></i>Reset Bot State
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let botRunning = false;
+        let performanceChart;
+        let capitalHistory = [];
+        let displayedLogs = new Set();
+
+        function initChart() {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+            performanceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Capital',
+                        data: [],
+                        borderColor: '#22c55e',
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: '#2a2a4e' },
+                            ticks: { color: '#8888aa' }
+                        },
+                        y: {
+                            grid: { color: '#2a2a4e' },
+                            ticks: { color: '#8888aa' }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function toggleBot() {
+            const btn = document.getElementById('startBotBtn');
+            const endpoint = botRunning ? '/api/bot/stop' : '/api/bot/start';
+            
+            try {
+                const response = await fetch(endpoint, { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    botRunning = !botRunning;
+                    updateStatusUI();
+                } else {
+                    alert(data.message);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to toggle bot');
+            }
+        }
+
+        function updateStatusUI() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const btn = document.getElementById('startBotBtn');
+            
+            if (botRunning) {
+                dot.className = 'w-4 h-4 rounded-full bg-green-500';
+                text.textContent = 'Running';
+                btn.innerHTML = '<i class="fas fa-stop mr-2"></i>Stop Bot';
+                btn.className = 'btn-danger text-lg';
+            } else {
+                dot.className = 'w-4 h-4 rounded-full bg-red-500';
+                text.textContent = 'Stopped';
+                btn.innerHTML = '<i class="fas fa-play mr-2"></i>Start Bot';
+                btn.className = 'btn-primary text-lg';
+            }
+        }
+
+        async function saveConfig() {
+            const config = {
+                rsi_period: parseInt(document.getElementById('rsiPeriod').value),
+                rsi_overbought: parseInt(document.getElementById('rsiOverbought').value),
+                rsi_oversold: parseInt(document.getElementById('rsiOversold').value),
+                take_profit_percent: parseFloat(document.getElementById('takeProfit').value),
+                stop_loss_percent: parseFloat(document.getElementById('stopLoss').value),
+                capital_percentage: parseFloat(document.getElementById('capitalPercent').value),
+            };
+
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Configuration saved successfully!');
+                } else {
+                    alert('Failed to save configuration');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to save configuration');
+            }
+        }
+
+        async function resetBot() {
+            if (confirm('Are you sure you want to reset the bot state? This will clear all trading history.')) {
+                try {
+                    const response = await fetch('/api/bot/reset', { method: 'POST' });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        alert('Bot state reset successfully!');
+                        location.reload();
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Failed to reset bot');
+                }
+            }
+        }
+
+        async function manualSell() {
+            if (confirm('Are you sure you want to manually sell your current position?')) {
+                try {
+                    const response = await fetch('/api/bot/manual-sell', { method: 'POST' });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        alert(`Manual sell executed at $${data.price.toFixed(2)}`);
+                    } else {
+                        alert(data.error || 'Failed to execute manual sell');
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Failed to execute manual sell');
+                }
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('logContainer').innerHTML = '<div class="text-gray-500">Logs cleared</div>';
+            displayedLogs.clear();
+        }
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                
+                if (data.logs && data.logs.length > 0) {
+                    const container = document.getElementById('logContainer');
+                    
+                    if (container.innerHTML.includes('Waiting for logs') || container.innerHTML.includes('Logs cleared')) {
+                        container.innerHTML = '';
+                    }
+                    
+                    data.logs.forEach(log => {
+                        const logLine = log.trim();
+                        if (logLine && !displayedLogs.has(logLine)) {
+                            displayedLogs.add(logLine);
+                            
+                            let colorClass = 'text-gray-300';
+                            if (logLine.includes('ERROR')) colorClass = 'text-red-400';
+                            else if (logLine.includes('WARNING')) colorClass = 'text-yellow-400';
+                            else if (logLine.includes('INFO')) colorClass = 'text-blue-300';
+                            else if (logLine.includes('BUY') || logLine.includes('SELL')) colorClass = 'text-green-400';
+                            
+                            const logEntry = document.createElement('div');
+                            logEntry.className = `log-entry ${colorClass}`;
+                            logEntry.textContent = logLine;
+                            container.appendChild(logEntry);
+                        }
+                    });
+                    
+                    container.scrollTop = container.scrollHeight;
+                }
+            } catch (error) {
+                console.error('Error fetching logs:', error);
+            }
+        }
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/bot/status');
+                const data = await response.json();
+                
+                document.getElementById('capitalValue').textContent = `$${data.capital.toFixed(2)}`;
+                document.getElementById('tradesValue').textContent = data.trades;
+                document.getElementById('positionValue').textContent = data.position || 'None';
+                document.getElementById('winRate').textContent = `Win Rate: ${(data.win_rate * 100).toFixed(1)}%`;
+                document.getElementById('streakValue').textContent = `Streak: ${data.consecutive_wins}W/${data.consecutive_losses}L`;
+                document.getElementById('bestTrade').textContent = `$${data.best_trade.toFixed(2)}`;
+                document.getElementById('worstTrade').textContent = `$${data.worst_trade.toFixed(2)}`;
+                document.getElementById('volatility').textContent = `${data.volatility_multiplier.toFixed(2)}x`;
+                
+                // Show/hide manual sell button based on position
+                const manualSellBtn = document.getElementById('manualSellBtn');
+                const manualSellProfit = document.getElementById('manualSellProfit');
+                if (data.position === 'long') {
+                    manualSellBtn.classList.remove('hidden');
+                    manualSellProfit.textContent = `(${data.current_position_profit_pct >= 0 ? '+' : ''}${data.current_position_profit_pct.toFixed(2)}%)`;
+                    manualSellProfit.className = data.current_position_profit_pct >= 0 ? 'text-green-300' : 'text-red-300';
+                } else {
+                    manualSellBtn.classList.add('hidden');
+                }
+                
+                const profitLoss = data.profit_loss;
+                const profitLossEl = document.getElementById('profitLoss');
+                if (profitLoss >= 0) {
+                    profitLossEl.textContent = `+$${profitLoss.toFixed(2)} (+${((profitLoss / 18) * 100).toFixed(2)}%)`;
+                    profitLossEl.className = 'text-lg text-green-400';
+                } else {
+                    profitLossEl.textContent = `-$${Math.abs(profitLoss).toFixed(2)} (${((profitLoss / 18) * 100).toFixed(2)}%)`;
+                    profitLossEl.className = 'text-lg text-red-400';
+                }
+                
+                botRunning = data.running;
+                updateStatusUI();
+                
+                capitalHistory.push(data.capital);
+                if (capitalHistory.length > 50) capitalHistory.shift();
+                
+                performanceChart.data.labels = capitalHistory.map((_, i) => i);
+                performanceChart.data.datasets[0].data = capitalHistory;
+                performanceChart.update('none');
+                
+            } catch (error) {
+                console.error('Error fetching status:', error);
+            }
+        }
+
+        async function fetchTrades() {
+            try {
+                const response = await fetch('/api/bot/trades');
+                const trades = await response.json();
+                
+                const container = document.getElementById('tradeHistory');
+                
+                if (trades.length === 0) {
+                    container.innerHTML = '<div class="text-gray-400 text-center py-8 text-lg">No trades yet</div>';
+                    return;
+                }
+                
+                container.innerHTML = trades.map(trade => `
+                    <div class="trade-item">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="text-lg font-semibold ${trade.profit >= 0 ? 'text-green-400' : 'text-red-400'}">
+                                    ${trade.profit >= 0 ? 'Profit' : 'Loss'}
+                                </div>
+                                <div class="text-gray-400">${trade.position_size.toFixed(6)} BTC</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-xl font-bold ${trade.profit >= 0 ? 'text-green-400' : 'text-red-400'}">
+                                    ${trade.profit >= 0 ? '+' : ''}$${trade.profit.toFixed(2)}
+                                </div>
+                                <div class="text-gray-400">${trade.profit_pct >= 0 ? '+' : ''}${trade.profit_pct.toFixed(2)}%</div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error fetching trades:', error);
+            }
+        }
+
+        initChart();
+        fetchStatus();
+        fetchTrades();
+        fetchLogs();
+        
+        setInterval(fetchStatus, 2000);
+        setInterval(fetchTrades, 5000);
+        setInterval(fetchLogs, 1000);
+    </script>
+</body>
+</html>

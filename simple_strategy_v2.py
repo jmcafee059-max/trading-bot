@@ -1,0 +1,515 @@
+import logging
+import logging.handlers
+import pandas as pd
+import numpy as np
+import json
+import os
+
+# Set up bot logger for centralized logging
+bot_logger = logging.getLogger('bot')
+bot_logger.setLevel(logging.INFO)
+
+# Clear any existing handlers to prevent duplicates
+bot_logger.handlers.clear()
+
+# Add file handler to bot_logger (no rotation to avoid file access issues)
+log_handler = logging.FileHandler('bot_logs.log')
+log_handler.setLevel(logging.INFO)
+log_handler.set_name('bot_file_handler')
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_handler.setFormatter(log_formatter)
+bot_logger.addHandler(log_handler)
+
+class SimpleRSIStrategy:
+    def __init__(self, exchange, config):
+        self.exchange = exchange
+        self.config = config
+        
+        # Strategy parameters from config
+        self.rsi_period = config.get('rsi_period', 7)
+        self.rsi_overbought = config.get('rsi_overbought', 65)
+        self.rsi_oversold = config.get('rsi_oversold', 35)
+        self.take_profit_pct = config.get('take_profit_percent', 2.0)
+        self.stop_loss_pct = config.get('stop_loss_percent', 0.5)
+        
+        # Capital management
+        self.starting_capital = config.get('starting_capital', 18)
+        self.current_capital = self.starting_capital
+        self.initial_capital = self.starting_capital
+        self.capital_percentage = config.get('capital_percentage', 90)
+        
+        # FIXED 20X VOLATILITY MULTIPLIER - Never changes
+        self.VOLATILITY_MULTIPLIER = 20.0
+        
+        # Trading state
+        self.currency_symbol = config.get('symbol', 'BTC/USDC').split('/')[1]
+        self.price_history = []
+        self.current_position = None
+        self.trade_count = 0
+        self.profit_loss = 0.0
+        self.last_buy_price = None
+        self.position_size = 0.0
+        self.consecutive_losses = 0
+        self.consecutive_wins = 0
+        self.highest_price_since_buy = None
+        self.trade_history = []
+        self.best_trade_profit = 0.0
+        self.worst_trade_loss = 0.0
+        
+        # Load saved state
+        self.load_capital_state()
+        
+        bot_logger.info(f"Strategy initialized with {self.VOLATILITY_MULTIPLIER}x volatility multiplier")
+    
+    def load_capital_state(self):
+        """Load capital state from file for persistence"""
+        state_file = 'capital_state.json'
+        try:
+            if os.path.exists(state_file):
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+                    self.current_capital = state.get('current_capital', self.starting_capital)
+                    self.trade_count = state.get('trade_count', 0)
+                    self.profit_loss = state.get('profit_loss', 0.0)
+                    self.consecutive_wins = state.get('consecutive_wins', 0)
+                    self.consecutive_losses = state.get('consecutive_losses', 0)
+                    bot_logger.info(f"Loaded capital state: {self.currency_symbol}{self.current_capital:.2f}, Trades: {self.trade_count}")
+        except Exception as e:
+            bot_logger.warning(f"Could not load capital state: {e}")
+            self.current_capital = self.starting_capital
+    
+    def save_capital_state(self):
+        """Save capital state to file"""
+        state_file = 'capital_state.json'
+        try:
+            state = {
+                'current_capital': self.current_capital,
+                'trade_count': self.trade_count,
+                'profit_loss': self.profit_loss,
+                'consecutive_wins': self.consecutive_wins,
+                'consecutive_losses': self.consecutive_losses
+            }
+            with open(state_file, 'w') as f:
+                json.dump(state, f)
+        except Exception as e:
+            bot_logger.warning(f"Could not save capital state: {e}")
+    
+    def calculate_position_size(self, current_price):
+        """Calculate position size with FIXED 5x volatility multiplier"""
+        # Calculate trade amount: Capital × Cap% × 5x Volatility
+        trade_amount = self.current_capital * (self.capital_percentage / 100) * self.VOLATILITY_MULTIPLIER
+        
+        # Calculate position size in base currency
+        position_size = trade_amount / current_price
+        
+        # Minimum position size
+        min_position = 0.00001
+        
+        bot_logger.info(f"=== POSITION CALCULATION ===")
+        bot_logger.info(f"Current Capital: ${self.current_capital:.2f}")
+        bot_logger.info(f"Capital Percentage: {self.capital_percentage}%")
+        bot_logger.info(f"Volatility Multiplier: {self.VOLATILITY_MULTIPLIER}x")
+        bot_logger.info(f"Trade Amount: ${trade_amount:.2f}")
+        bot_logger.info(f"Current Price: ${current_price:.2f}")
+        bot_logger.info(f"Position Size: {position_size:.6f}")
+        bot_logger.info(f"Expected Profit at 1%: ${trade_amount * 0.01:.2f}")
+        bot_logger.info(f"========================")
+        
+        return max(position_size, min_position)
+    
+    def calculate_rsi(self, prices):
+        """Calculate RSI using pandas"""
+        try:
+            if len(prices) < 2:
+                return 50
+            df = pd.DataFrame({'price': prices})
+            delta = df['price'].diff()
+            
+            period = max(2, min(self.rsi_period, len(prices) - 1))
+            
+            gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
+            
+            if loss.iloc[-1] == 0:
+                if gain.iloc[-1] == 0:
+                    return 50
+                return 90
+            
+            rs = gain / loss
+            rsiValues = 100 - (100 / (1 + rs))
+            
+            rsi_value = rsiValues.iloc[-1]
+            if pd.isna(rsi_value):
+                return 50
+            if rsi_value > 95:
+                return 95
+            if rsi_value < 5:
+                return 5
+            return rsi_value
+        except Exception as e:
+            bot_logger.warning(f"RSI calculation failed: {e}")
+            return 50
+    
+    def calculate_ema(self, prices, period):
+        """Calculate EMA using pandas"""
+        try:
+            if len(prices) < period:
+                return prices[-1] if prices else None
+            df = pd.DataFrame({'price': prices})
+            ema_values = df['price'].ewm(span=period, adjust=False).mean()
+            return ema_values.iloc[-1]
+        except Exception as e:
+            bot_logger.warning(f"EMA calculation failed: {e}")
+            return prices[-1] if prices else None
+    
+    def calculate_macd(self, prices):
+        """Calculate MACD using pandas"""
+        try:
+            if len(prices) < 26:
+                return None, None, None
+            df = pd.DataFrame({'price': prices})
+            
+            # Calculate EMAs
+            ema_fast = df['price'].ewm(span=12, adjust=False).mean()
+            ema_slow = df['price'].ewm(span=26, adjust=False).mean()
+            
+            # MACD line
+            macd_line = ema_fast - ema_slow
+            
+            # Signal line
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            
+            # Histogram
+            histogram = macd_line - signal_line
+            
+            return macd_line.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
+        except Exception as e:
+            bot_logger.warning(f"MACD calculation failed: {e}")
+            return None, None, None
+    
+    def calculate_bollinger_bands(self, prices):
+        """Calculate Bollinger Bands using pandas"""
+        try:
+            if len(prices) < 20:
+                return None, None, None
+            df = pd.DataFrame({'price': prices})
+            
+            # Middle band (SMA)
+            middle = df['price'].rolling(window=20).mean()
+            
+            # Standard deviation
+            std = df['price'].rolling(window=20).std()
+            
+            # Upper and lower bands
+            upper = middle + (std * 2)
+            lower = middle - (std * 2)
+            
+            return upper.iloc[-1], middle.iloc[-1], lower.iloc[-1]
+        except Exception as e:
+            bot_logger.warning(f"Bollinger Bands calculation failed: {e}")
+            return None, None, None
+    
+    def detect_rsi_divergence(self, prices, rsi_values):
+        """Detect bullish RSI divergence (price lower low, RSI higher low)"""
+        try:
+            if len(prices) < 10 or len(rsi_values) < 10:
+                return False
+            
+            # Get recent price lows
+            recent_prices = prices[-10:]
+            recent_rsi = rsi_values[-10:]
+            
+            # Find local lows
+            price_lows = []
+            rsi_lows = []
+            
+            for i in range(2, len(recent_prices) - 2):
+                if (recent_prices[i] < recent_prices[i-1] and recent_prices[i] < recent_prices[i-2] and
+                    recent_prices[i] < recent_prices[i+1] and recent_prices[i] < recent_prices[i+2]):
+                    price_lows.append((i, recent_prices[i]))
+                    rsi_lows.append(recent_rsi[i])
+            
+            # Check for bullish divergence (price lower low, RSI higher low)
+            if len(price_lows) >= 2:
+                last_price_low = price_lows[-1][1]
+                prev_price_low = price_lows[-2][1]
+                last_rsi_low = rsi_lows[-1]
+                prev_rsi_low = rsi_lows[-2]
+                
+                if last_price_low < prev_price_low and last_rsi_low > prev_rsi_low:
+                    return True
+            
+            return False
+        except Exception as e:
+            bot_logger.warning(f"RSI divergence detection failed: {e}")
+            return False
+    
+    def detect_support_resistance(self, prices):
+        """Detect support and resistance levels"""
+        try:
+            if len(prices) < 20:
+                return None, None
+            
+            recent_prices = prices[-20:]
+            
+            # Calculate support (recent lows) and resistance (recent highs)
+            lows = []
+            highs = []
+            
+            for i in range(2, len(recent_prices) - 2):
+                if (recent_prices[i] < recent_prices[i-1] and recent_prices[i] < recent_prices[i-2] and
+                    recent_prices[i] < recent_prices[i+1] and recent_prices[i] < recent_prices[i+2]):
+                    lows.append(recent_prices[i])
+                
+                if (recent_prices[i] > recent_prices[i-1] and recent_prices[i] > recent_prices[i-2] and
+                    recent_prices[i] > recent_prices[i+1] and recent_prices[i] > recent_prices[i+2]):
+                    highs.append(recent_prices[i])
+            
+            support = sum(lows) / len(lows) if lows else None
+            resistance = sum(highs) / len(highs) if highs else None
+            
+            return support, resistance
+        except Exception as e:
+            bot_logger.warning(f"Support/Resistance detection failed: {e}")
+            return None, None
+    
+    def detect_breakout(self, current_price, support, resistance):
+        """Detect price breakout from support/resistance"""
+        try:
+            if support is None or resistance is None:
+                return False, False
+            
+            # Bullish breakout (price breaks resistance)
+            bullish_breakout = current_price > resistance * 1.005
+            
+            # Bearish breakdown (price breaks support)
+            bearish_breakdown = current_price < support * 0.995
+            
+            return bullish_breakout, bearish_breakdown
+        except Exception as e:
+            bot_logger.warning(f"Breakout detection failed: {e}")
+            return False, False
+    
+    def place_buy_order(self, current_price):
+        """Place buy order"""
+        position_size = self.calculate_position_size(current_price)
+        trade_value = position_size * current_price
+        
+        self.current_position = 'long'
+        self.last_buy_price = current_price
+        self.position_size = position_size
+        self.highest_price_since_buy = current_price
+        
+        bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} BTC | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x")
+        
+        return position_size
+    
+    def place_sell_order(self, current_price, reason):
+        """Place sell order"""
+        if self.current_position != 'long' or self.last_buy_price is None:
+            return
+        
+        # Calculate profit/loss
+        profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+        profit_amount = (current_price - self.last_buy_price) * self.position_size
+        
+        # Update statistics
+        self.trade_count += 1
+        self.profit_loss += profit_amount
+        self.current_capital += profit_amount
+        
+        if profit_amount > 0:
+            self.consecutive_wins += 1
+            self.consecutive_losses = 0
+            if profit_amount > self.best_trade_profit:
+                self.best_trade_profit = profit_amount
+        else:
+            self.consecutive_losses += 1
+            self.consecutive_wins = 0
+            if profit_amount < self.worst_trade_loss:
+                self.worst_trade_loss = profit_amount
+        
+        # Record trade
+        trade_record = {
+            'trade_number': self.trade_count,
+            'buy_price': self.last_buy_price,
+            'sell_price': current_price,
+            'position_size': self.position_size,
+            'profit': profit_amount,
+            'profit_pct': profit_pct,
+            'reason': reason
+        }
+        self.trade_history.append(trade_record)
+        
+        bot_logger.info(f"[SELL #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} | Capital: ${self.current_capital:.2f}")
+        
+        # Reset position
+        self.current_position = None
+        self.last_buy_price = None
+        self.position_size = 0.0
+        self.highest_price_since_buy = None
+        
+        # Save state
+        self.save_capital_state()
+        
+        return profit_amount
+    
+    def handle_trade_event(self, current_price):
+        """Main trading logic"""
+        bot_logger.info(f"=== handle_trade_event called === Price: ${current_price:.2f}, Position: {self.current_position}")
+        
+        # Add price to history
+        self.price_history.append(current_price)
+        if len(self.price_history) > 100:
+            self.price_history.pop(0)
+        
+        bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {self.current_position or 'None'} | Trades: {self.trade_count}")
+        
+        # Need at least some data for indicators
+        if len(self.price_history) < 5:
+            if self.current_position is None and self.trade_count == 0:
+                # Force first trade
+                self.place_buy_order(current_price)
+            return
+        
+        # Calculate indicators using tradingkit
+        rsi = self.calculate_rsi(self.price_history)
+        ema_short = self.calculate_ema(self.price_history, 9)
+        ema_long = self.calculate_ema(self.price_history, 21)
+        macd_line, signal_line, histogram = self.calculate_macd(self.price_history)
+        bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(self.price_history)
+        
+        # Calculate RSI history for divergence detection
+        rsi_history = [self.calculate_rsi(self.price_history[:i+1]) for i in range(len(self.price_history))]
+        
+        # Detect trading patterns
+        rsi_divergence = self.detect_rsi_divergence(self.price_history, rsi_history)
+        support, resistance = self.detect_support_resistance(self.price_history)
+        bullish_breakout, bearish_breakdown = self.detect_breakout(current_price, support, resistance)
+        
+        if rsi is None or ema_short is None or ema_long is None:
+            return
+        
+        trend = "BULLISH" if ema_short > ema_long else "BEARISH"
+        
+        # MACD signal
+        macd_bullish = macd_line is not None and signal_line is not None and macd_line > signal_line
+        macd_bearish = macd_line is not None and signal_line is not None and macd_line < signal_line
+        
+        # Bollinger Bands signal
+        price_near_lower = bb_lower is not None and current_price <= bb_lower * 1.02
+        price_near_upper = bb_upper is not None and current_price >= bb_upper * 0.98
+        
+        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | Divergence: {'YES' if rsi_divergence else 'NO'} | Breakout: {'BULL' if bullish_breakout else 'BEAR' if bearish_breakdown else 'NONE'} | Vol: {self.VOLATILITY_MULTIPLIER}x")
+        
+        # Trading logic
+        if self.current_position is None:
+            # Buy signals - MAXIMIZED with trading patterns
+            should_buy = (
+                rsi_divergence or  # RSI bullish divergence (strong buy signal)
+                bullish_breakout or  # Price breaks resistance
+                rsi < self.rsi_oversold or  # Oversold
+                (rsi < 40 and trend == "BULLISH") or  # Bullish momentum
+                (rsi < 50 and trend == "BULLISH") or  # Neutral bullish
+                (rsi < 45) or  # Any RSI below 45
+                (rsi < 55) or  # Any RSI below 55
+                (rsi < 60 and trend == "BULLISH") or  # Bullish with moderate RSI
+                (macd_bullish and rsi < 60) or  # MACD bullish with reasonable RSI
+                (price_near_lower and rsi < 60) or  # Price near lower BB with reasonable RSI
+                (macd_bullish and price_near_lower) or  # Both MACD and BB bullish
+                (support and current_price <= support * 1.01) or  # Price near support
+                (self.trade_count == 0) or  # Force first trade
+                (len(self.price_history) > 5 and rsi < 65) or  # Buy after some data if RSI reasonable
+                (len(self.price_history) > 5) or  # FORCE BUY after 5 price ticks regardless
+                True  # FORCE BUY ALWAYS - ULTRA AGGRESSIVE
+            )
+            
+            bot_logger.info(f"Buy Check: RSI={rsi:.1f}, Trend={trend}, ShouldBuy={should_buy}, PriceHistory={len(self.price_history)}")
+            
+            if should_buy:
+                self.place_buy_order(current_price)
+        
+        elif self.current_position == 'long':
+            # Update highest price for trailing stop
+            if current_price > self.highest_price_since_buy:
+                self.highest_price_since_buy = current_price
+            
+            profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+            
+            # Debug logging for sell logic
+            bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
+            
+            # Sell signals - MAXIMIZED with trading patterns
+            should_sell = False
+            reason = ""
+            
+            # FORCE SELL after 30 price ticks regardless of profit/loss
+            if len(self.price_history) > 30 and self.current_position == 'long':
+                should_sell = True
+                reason = "Max Hold Time"
+                bot_logger.info(f"Forcing sell due to max hold time")
+            
+            # FORCE SELL if any profit > 0.5% (take quick profit)
+            elif profit_pct > 0.5:
+                should_sell = True
+                reason = "Quick Profit"
+                bot_logger.info(f"Quick profit at {profit_pct:.2f}%")
+            
+            # Take profit
+            elif profit_pct >= self.take_profit_pct:
+                should_sell = True
+                reason = "Take Profit"
+                bot_logger.info(f"Take profit triggered at {profit_pct:.2f}%")
+            
+            # Stop loss
+            elif profit_pct <= -self.stop_loss_pct:
+                should_sell = True
+                reason = "Stop Loss"
+                bot_logger.info(f"Stop loss triggered at {profit_pct:.2f}%")
+            
+            # Trailing stop loss (0.5% below highest)
+            elif self.highest_price_since_buy > self.last_buy_price:
+                trailing_stop_pct = ((self.highest_price_since_buy - current_price) / self.highest_price_since_buy) * 100
+                if trailing_stop_pct >= 0.5:
+                    should_sell = True
+                    reason = "Trailing Stop"
+                    bot_logger.info(f"Trailing stop triggered at {trailing_stop_pct:.2f}%")
+            
+            # MACD bearish crossover (sell signal)
+            elif macd_bearish and profit_pct > 0:
+                should_sell = True
+                reason = "MACD Bearish"
+                bot_logger.info(f"MACD bearish crossover with profit {profit_pct:.2f}%")
+            
+            # Price near upper Bollinger Band (overbought)
+            elif price_near_upper and profit_pct > 0:
+                should_sell = True
+                reason = "BB Overbought"
+                bot_logger.info(f"Price near upper BB with profit {profit_pct:.2f}%")
+            
+            # RSI overbought with MACD bearish
+            elif rsi > self.rsi_overbought and macd_bearish and profit_pct > 0:
+                should_sell = True
+                reason = "RSI+MACD Overbought"
+                bot_logger.info(f"RSI overbought with MACD bearish, profit {profit_pct:.2f}%")
+            
+            # Bearish breakdown (price breaks support)
+            elif bearish_breakdown and profit_pct > 0:
+                should_sell = True
+                reason = "Bearish Breakdown"
+                bot_logger.info(f"Bearish breakdown with profit {profit_pct:.2f}%")
+            
+            # Price near resistance with profit
+            elif resistance and current_price >= resistance * 0.99 and profit_pct > 0:
+                should_sell = True
+                reason = "Near Resistance"
+                bot_logger.info(f"Price near resistance with profit {profit_pct:.2f}%")
+            
+            # FORCE SELL if profit > 3% (take partial profit)
+            elif profit_pct > 3:
+                should_sell = True
+                reason = "Partial Profit"
+                bot_logger.info(f"Partial profit at {profit_pct:.2f}%")
+            
+            if should_sell:
+                self.place_sell_order(current_price, reason)
