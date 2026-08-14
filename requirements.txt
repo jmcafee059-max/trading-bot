@@ -1,8 +1,8 @@
 tradingkit==1.11.8
 ccxt==4.5.73
-pandas==1.5.2
-numpy==1.24.1
-python-dotenv==0.21.0
-flask==2.3.3
+pandas>=2.0.0
+numpy>=1.24.0
+python-dotenv==1.0.0
+flask==3.0.0
 flask-cors==4.0.0
 gunicorn==21.2.0
