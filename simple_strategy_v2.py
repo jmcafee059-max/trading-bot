@@ -42,7 +42,13 @@ class SimpleRSIStrategy:
         self.VOLATILITY_MULTIPLIER = 20.0
         
         # Trading state
-        self.currency_symbol = config.get('symbol', 'BTC/USDC').split('/')[1]
+        symbol = config.get('symbol', 'BTC/USDC')
+        if '/' in symbol:
+            self.currency_symbol = symbol.split('/')[1]
+        elif '-' in symbol:
+            self.currency_symbol = symbol.split('-')[1]
+        else:
+            self.currency_symbol = 'USD'  # fallback
         self.price_history = []
         self.current_position = None
         self.trade_count = 0
@@ -157,6 +163,8 @@ class SimpleRSIStrategy:
                 return prices[-1] if prices else None
             df = pd.DataFrame({'price': prices})
             ema_values = df['price'].ewm(span=period, adjust=False).mean()
+            if len(ema_values) == 0:
+                return prices[-1] if prices else None
             return ema_values.iloc[-1]
         except Exception as e:
             bot_logger.warning(f"EMA calculation failed: {e}")
@@ -182,6 +190,9 @@ class SimpleRSIStrategy:
             # Histogram
             histogram = macd_line - signal_line
             
+            if len(macd_line) == 0 or len(signal_line) == 0 or len(histogram) == 0:
+                return None, None, None
+                
             return macd_line.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
         except Exception as e:
             bot_logger.warning(f"MACD calculation failed: {e}")
@@ -204,6 +215,9 @@ class SimpleRSIStrategy:
             upper = middle + (std * 2)
             lower = middle - (std * 2)
             
+            if len(middle) == 0 or len(upper) == 0 or len(lower) == 0:
+                return None, None, None
+                
             return upper.iloc[-1], middle.iloc[-1], lower.iloc[-1]
         except Exception as e:
             bot_logger.warning(f"Bollinger Bands calculation failed: {e}")
