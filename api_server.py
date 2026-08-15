@@ -34,6 +34,11 @@ bot_config = {
     'take_profit_percent': float(os.getenv('TAKE_PROFIT_PERCENT', '5.0')),
     'stop_loss_percent': float(os.getenv('STOP_LOSS_PERCENT', '0.1')),
     'volatility_multiplier': float(os.getenv('VOLATILITY_MULTIPLIER', '2')),
+    'ema_short': int(os.getenv('EMA_SHORT', '9')),
+    'ema_long': int(os.getenv('EMA_LONG', '21')),
+    'sma_period': int(os.getenv('SMA_PERIOD', '50')),
+    'volume_threshold': float(os.getenv('VOLUME_THRESHOLD', '1.5')),
+    'momentum_period': int(os.getenv('MOMENTUM_PERIOD', '14')),
 }
 
 @app.route('/')
@@ -64,6 +69,12 @@ def update_config():
         'RSI_OVERSOLD': str(bot_config['rsi_oversold']),
         'TAKE_PROFIT_PERCENT': str(bot_config['take_profit_percent']),
         'STOP_LOSS_PERCENT': str(bot_config['stop_loss_percent']),
+        'VOLATILITY_MULTIPLIER': str(bot_config['volatility_multiplier']),
+        'EMA_SHORT': str(bot_config['ema_short']),
+        'EMA_LONG': str(bot_config['ema_long']),
+        'SMA_PERIOD': str(bot_config['sma_period']),
+        'VOLUME_THRESHOLD': str(bot_config['volume_threshold']),
+        'MOMENTUM_PERIOD': str(bot_config['momentum_period']),
     }
     
     with open('.env', 'w') as f:
@@ -83,6 +94,12 @@ def update_config():
         f.write(f"RSI_OVERSOLD={env_updates['RSI_OVERSOLD']}\n")
         f.write(f"TAKE_PROFIT_PERCENT={env_updates['TAKE_PROFIT_PERCENT']}\n")
         f.write(f"STOP_LOSS_PERCENT={env_updates['STOP_LOSS_PERCENT']}\n")
+        f.write(f"VOLATILITY_MULTIPLIER={env_updates['VOLATILITY_MULTIPLIER']}\n")
+        f.write(f"EMA_SHORT={env_updates['EMA_SHORT']}\n")
+        f.write(f"EMA_LONG={env_updates['EMA_LONG']}\n")
+        f.write(f"SMA_PERIOD={env_updates['SMA_PERIOD']}\n")
+        f.write(f"VOLUME_THRESHOLD={env_updates['VOLUME_THRESHOLD']}\n")
+        f.write(f"MOMENTUM_PERIOD={env_updates['MOMENTUM_PERIOD']}\n")
     
     return jsonify({'success': True, 'config': bot_config})
 

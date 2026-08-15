@@ -34,6 +34,13 @@ class SimpleRSIStrategy:
         self.take_profit_pct = config.get('take_profit_percent', 2.0)
         self.stop_loss_pct = config.get('stop_loss_percent', 0.5)
         
+        # Complex strategy parameters
+        self.ema_short = config.get('ema_short', 9)
+        self.ema_long = config.get('ema_long', 21)
+        self.sma_period = config.get('sma_period', 50)
+        self.volume_threshold = config.get('volume_threshold', 1.5)
+        self.momentum_period = config.get('momentum_period', 14)
+        
         # Capital management
         self.starting_capital = config.get('starting_capital', 18)
         self.current_capital = self.starting_capital
@@ -190,6 +197,20 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"RSI calculation failed: {e}")
             return 50
     
+    def calculate_sma(self, prices, period):
+        """Calculate SMA using pandas"""
+        try:
+            if len(prices) < period:
+                return prices[-1] if prices else None
+            df = pd.DataFrame({'price': prices})
+            sma_values = df['price'].rolling(window=period).mean()
+            if len(sma_values) == 0:
+                return prices[-1] if prices else None
+            return sma_values.iloc[-1]
+        except Exception as e:
+            bot_logger.warning(f"SMA calculation failed: {e}")
+            return prices[-1] if prices else None
+    
     def calculate_ema(self, prices, period):
         """Calculate EMA using pandas"""
         try:
@@ -231,6 +252,68 @@ class SimpleRSIStrategy:
         except Exception as e:
             bot_logger.warning(f"MACD calculation failed: {e}")
             return None, None, None
+    
+    def calculate_momentum(self, prices, period):
+        """Calculate momentum indicator"""
+        try:
+            if len(prices) < period + 1:
+                return 0
+            return prices[-1] - prices[-period - 1]
+        except Exception as e:
+            bot_logger.warning(f"Momentum calculation failed: {e}")
+            return 0
+    
+    def calculate_atr(self, prices, period=14):
+        """Calculate Average True Range for volatility"""
+        try:
+            if len(prices) < period + 1:
+                return 0
+            df = pd.DataFrame({'price': prices})
+            high = df['price']
+            low = df['price'].shift(1)
+            tr = pd.concat([high - low, (high - df['price'].shift(1)).abs(), (low - df['price'].shift(1)).abs()], axis=1).max(axis=1)
+            atr = tr.rolling(window=period).mean()
+            return atr.iloc[-1] if len(atr) > 0 else 0
+        except Exception as e:
+            bot_logger.warning(f"ATR calculation failed: {e}")
+            return 0
+    
+    def calculate_volume_sma(self, volumes, period):
+        """Calculate volume SMA"""
+        try:
+            if len(volumes) < period:
+                return volumes[-1] if volumes else 0
+            df = pd.DataFrame({'volume': volumes})
+            volume_sma = df['volume'].rolling(window=period).mean()
+            return volume_sma.iloc[-1] if len(volume_sma) > 0 else 0
+        except Exception as e:
+            bot_logger.warning(f"Volume SMA calculation failed: {e}")
+            return 0
+    
+    def detect_trend(self, prices):
+        """Detect overall trend using multiple indicators"""
+        try:
+            if len(prices) < self.sma_period:
+                return "NEUTRAL"
+            
+            sma = self.calculate_sma(prices, self.sma_period)
+            ema_short = self.calculate_ema(prices, self.ema_short)
+            ema_long = self.calculate_ema(prices, self.ema_long)
+            current_price = prices[-1]
+            
+            # Trend conditions
+            bullish = current_price > sma and ema_short > ema_long
+            bearish = current_price < sma and ema_short < ema_long
+            
+            if bullish:
+                return "BULLISH"
+            elif bearish:
+                return "BEARISH"
+            else:
+                return "NEUTRAL"
+        except Exception as e:
+            bot_logger.warning(f"Trend detection failed: {e}")
+            return "NEUTRAL"
     
     def calculate_bollinger_bands(self, prices):
         """Calculate Bollinger Bands using pandas"""
@@ -576,12 +659,16 @@ class SimpleRSIStrategy:
                 self.place_buy_order(current_price)
             return
         
-        # Calculate indicators using tradingkit
+        # Calculate indicators using complex strategy
         rsi = self.calculate_rsi(self.price_history)
-        ema_short = self.calculate_ema(self.price_history, 9)
-        ema_long = self.calculate_ema(self.price_history, 21)
+        ema_short = self.calculate_ema(self.price_history, self.ema_short)
+        ema_long = self.calculate_ema(self.price_history, self.ema_long)
+        sma = self.calculate_sma(self.price_history, self.sma_period)
         macd_line, signal_line, histogram = self.calculate_macd(self.price_history)
         bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(self.price_history)
+        momentum = self.calculate_momentum(self.price_history, self.momentum_period)
+        atr = self.calculate_atr(self.price_history)
+        trend = self.detect_trend(self.price_history)
         
         # Calculate RSI history for divergence detection
         rsi_history = [self.calculate_rsi(self.price_history[:i+1]) for i in range(len(self.price_history))]
@@ -594,8 +681,6 @@ class SimpleRSIStrategy:
         if rsi is None or ema_short is None or ema_long is None:
             return
         
-        trend = "BULLISH" if ema_short > ema_long else "BEARISH"
-        
         # MACD signal
         macd_bullish = macd_line is not None and signal_line is not None and macd_line > signal_line
         macd_bearish = macd_line is not None and signal_line is not None and macd_line < signal_line
@@ -604,31 +689,74 @@ class SimpleRSIStrategy:
         price_near_lower = bb_lower is not None and current_price <= bb_lower * 1.02
         price_near_upper = bb_upper is not None and current_price >= bb_upper * 0.98
         
-        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | Divergence: {'YES' if rsi_divergence else 'NO'} | Breakout: {'BULL' if bullish_breakout else 'BEAR' if bearish_breakdown else 'NONE'} | Vol: {self.VOLATILITY_MULTIPLIER}x")
+        # Complex strategy signals
+        ema_crossover_bullish = ema_short > ema_long and self.price_history[-2] and ema_short > ema_long
+        price_above_sma = sma is not None and current_price > sma
+        momentum_positive = momentum > 0
+        atr_signal = atr > 0 and (current_price - self.last_buy_price) / self.last_buy_price < (atr / current_price) if self.last_buy_price else True
+        
+        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | EMA: {'BULL' if ema_short > ema_long else 'BEAR'} | SMA: {'ABOVE' if price_above_sma else 'BELOW'} | Mom: {'POS' if momentum_positive else 'NEG'} | ATR: {atr:.4f} | Vol: {self.VOLATILITY_MULTIPLIER}x")
         
         # Trading logic
         if self.current_position is None:
-            # Buy signals - MAXIMIZED with trading patterns
-            should_buy = (
-                rsi_divergence or  # RSI bullish divergence (strong buy signal)
-                bullish_breakout or  # Price breaks resistance
-                rsi < self.rsi_oversold or  # Oversold
-                (rsi < 40 and trend == "BULLISH") or  # Bullish momentum
-                (rsi < 50 and trend == "BULLISH") or  # Neutral bullish
-                (rsi < 45) or  # Any RSI below 45
-                (rsi < 55) or  # Any RSI below 55
-                (rsi < 60 and trend == "BULLISH") or  # Bullish with moderate RSI
-                (macd_bullish and rsi < 60) or  # MACD bullish with reasonable RSI
-                (price_near_lower and rsi < 60) or  # Price near lower BB with reasonable RSI
-                (macd_bullish and price_near_lower) or  # Both MACD and BB bullish
-                (support and current_price <= support * 1.01) or  # Price near support
-                (self.trade_count == 0) or  # Force first trade
-                (len(self.price_history) > 5 and rsi < 65) or  # Buy after some data if RSI reasonable
-                (len(self.price_history) > 5) or  # FORCE BUY after 5 price ticks regardless
-                True  # FORCE BUY ALWAYS - ULTRA AGGRESSIVE
-            )
+            # Complex buy signals - require multiple confirmations
+            bullish_signals = 0
+            total_signals = 0
             
-            bot_logger.info(f"Buy Check: RSI={rsi:.1f}, Trend={trend}, ShouldBuy={should_buy}, PriceHistory={len(self.price_history)}")
+            # RSI signals
+            total_signals += 1
+            if rsi < self.rsi_oversold:
+                bullish_signals += 1
+            elif rsi < 40:
+                bullish_signals += 0.5
+            
+            # Trend signals
+            total_signals += 1
+            if trend == "BULLISH":
+                bullish_signals += 1
+            
+            # EMA crossover
+            total_signals += 1
+            if ema_short > ema_long:
+                bullish_signals += 1
+            
+            # SMA position
+            total_signals += 1
+            if price_above_sma:
+                bullish_signals += 1
+            
+            # MACD
+            total_signals += 1
+            if macd_bullish:
+                bullish_signals += 1
+            
+            # Momentum
+            total_signals += 1
+            if momentum_positive:
+                bullish_signals += 1
+            
+            # Bollinger Bands
+            total_signals += 1
+            if price_near_lower:
+                bullish_signals += 1
+            
+            # RSI divergence
+            total_signals += 1
+            if rsi_divergence:
+                bullish_signals += 1
+            
+            # Bullish breakout
+            total_signals += 1
+            if bullish_breakout:
+                bullish_signals += 1
+            
+            # Calculate bullish percentage
+            bullish_pct = (bullish_signals / total_signals) * 100 if total_signals > 0 else 0
+            
+            # Buy if majority of signals are bullish (60%+)
+            should_buy = bullish_pct >= 60 or self.trade_count == 0
+            
+            bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | ShouldBuy={should_buy}")
             
             if should_buy:
                 self.place_buy_order(current_price)
