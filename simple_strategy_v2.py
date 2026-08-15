@@ -43,9 +43,9 @@ class SimpleRSIStrategy:
         
         # Ultra-aggressive profit parameters
         self.max_position_size = config.get('max_position_size', 0.5)  # Use 50% of capital max for safety
-        self.min_confidence_threshold = config.get('min_confidence_threshold', 0.5)  # Balanced threshold
+        self.min_confidence_threshold = config.get('min_confidence_threshold', 0.3)  # Lower threshold for more trades
         self.profit_multiplier = config.get('profit_multiplier', 1.0)  # Conservative multiplier
-        self.aggressive_mode = config.get('aggressive_mode', False)  # Disabled by default for safety
+        self.aggressive_mode = config.get('aggressive_mode', True)  # Enable aggressive trading
         
         # Performance tracking for adaptive optimization
         self.recent_trades = []
