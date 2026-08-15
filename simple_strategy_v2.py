@@ -24,6 +24,7 @@ class SimpleRSIStrategy:
     def __init__(self, exchange, config):
         self.exchange = exchange
         self.config = config
+        self.symbol = config.get('symbol', 'BTC/USDC')
         
         # Strategy parameters from config
         self.rsi_period = config.get('rsi_period', 7)
@@ -309,12 +310,21 @@ class SimpleRSIStrategy:
         position_size = self.calculate_position_size(current_price)
         trade_value = position_size * current_price
         
+        # Execute real buy order on exchange
+        try:
+            order = self.exchange.create_market_buy_order(self.symbol, position_size)
+            bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order.get('id', 'N/A')}")
+        except Exception as e:
+            bot_logger.error(f"Failed to place real buy order: {e}")
+            # Fall back to paper trading if order fails
+            bot_logger.warning("Falling back to paper trading for this order")
+        
         self.current_position = 'long'
         self.last_buy_price = current_price
         self.position_size = position_size
         self.highest_price_since_buy = current_price
         
-        bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} BTC | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x")
+        bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x")
         
         return position_size
     
@@ -322,6 +332,15 @@ class SimpleRSIStrategy:
         """Place sell order"""
         if self.current_position != 'long' or self.last_buy_price is None:
             return
+        
+        # Execute real sell order on exchange
+        try:
+            order = self.exchange.create_market_sell_order(self.symbol, self.position_size)
+            bot_logger.info(f"[REAL SELL ORDER PLACED] Order ID: {order.get('id', 'N/A')}")
+        except Exception as e:
+            bot_logger.error(f"Failed to place real sell order: {e}")
+            # Fall back to paper trading if order fails
+            bot_logger.warning("Falling back to paper trading for this order")
         
         # Calculate profit/loss
         profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
