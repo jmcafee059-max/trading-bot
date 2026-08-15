@@ -1,10 +1,14 @@
 import logging
 import logging.handlers
+import ccxt
 import pandas as pd
 import numpy as np
-import json
 import os
+import json
 import time
+from datetime import datetime
+from dotenv import load_dotenv
+from ml_models import MLTradingEnsemble, PricePredictionLSTM, SignalConfirmationRF, PatternRecognitionNN
 
 # Set up bot logger for centralized logging
 bot_logger = logging.getLogger('bot')
@@ -53,6 +57,19 @@ class SimpleRSIStrategy:
         self.avg_profit = 0
         self.avg_loss = 0
         self.sharpe_ratio = 0
+        
+        # Machine Learning Integration
+        self.ml_ensemble = MLTradingEnsemble()
+        self.ml_enabled = config.get('ml_enabled', True)
+        self.use_ml_signals = config.get('use_ml_signals', True)
+        
+        # Try to load pre-trained ML models
+        if self.ml_enabled:
+            try:
+                self.ml_ensemble.load_all()
+                bot_logger.info("ML models loaded successfully")
+            except Exception as e:
+                bot_logger.warning(f"Could not load ML models: {e}. Will train when data available.")
         
         # Capital management
         self.starting_capital = config.get('starting_capital', 18)
@@ -941,6 +958,51 @@ class SimpleRSIStrategy:
             
             # Buy if majority of signals are bullish (adaptive threshold)
             should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+            
+            # ML Signal Integration
+            if self.ml_enabled and self.use_ml_signals and len(self.price_history) >= 100:
+                try:
+                    # Create DataFrame for ML prediction
+                    ml_data = pd.DataFrame({
+                        'close': self.price_history,
+                        'volume': [1] * len(self.price_history),  # Placeholder volume
+                        'open': self.price_history,  # Use close as placeholder
+                        'high': self.price_history,  # Use close as placeholder
+                        'low': self.price_history   # Use close as placeholder
+                    })
+                    
+                    ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
+                    
+                    if ml_signals:
+                        bot_logger.info(f"ML Signals: {ml_signals}")
+                        
+                        # Incorporate ML signals into decision
+                        ml_bullish_score = 0
+                        
+                        # LSTM prediction (price direction)
+                        if 'lstm' in ml_signals:
+                            lstm_pred = ml_signals['lstm']
+                            if lstm_pred > current_price:
+                                ml_bullish_score += 2
+                        
+                        # Random Forest signal
+                        if 'random_forest' in ml_signals:
+                            rf_signal = ml_signals['random_forest']
+                            if rf_signal['signal'] == 1 and rf_signal['confidence'] > 0.6:
+                                ml_bullish_score += 3
+                            elif rf_signal['signal'] == 0:
+                                ml_bullish_score -= 2
+                        
+                        # Adjust bullish percentage based on ML signals
+                        if ml_bullish_score > 0:
+                            bullish_pct = min(bullish_pct + (ml_bullish_score * 5), 100)
+                        elif ml_bullish_score < 0:
+                            bullish_pct = max(bullish_pct + (ml_bullish_score * 5), 0)
+                            
+                        bot_logger.info(f"ML-adjusted bullish percentage: {bullish_pct:.1f}%")
+                        
+                except Exception as e:
+                    bot_logger.warning(f"ML signal integration failed: {e}")
             
             # Force buy if no trades yet and we have some bullish signals
             if self.trade_count == 0 and bullish_pct > 0:
