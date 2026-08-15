@@ -33,6 +33,7 @@ bot_config = {
     'rsi_oversold': int(os.getenv('RSI_OVERSOLD', '35')),
     'take_profit_percent': float(os.getenv('TAKE_PROFIT_PERCENT', '5.0')),
     'stop_loss_percent': float(os.getenv('STOP_LOSS_PERCENT', '0.1')),
+    'volatility_multiplier': float(os.getenv('VOLATILITY_MULTIPLIER', '2')),
 }
 
 @app.route('/')

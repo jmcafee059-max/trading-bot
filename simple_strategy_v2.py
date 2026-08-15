@@ -39,8 +39,8 @@ class SimpleRSIStrategy:
         self.initial_capital = self.starting_capital
         self.capital_percentage = config.get('capital_percentage', 90)
         
-        # FIXED 20X VOLATILITY MULTIPLIER - Never changes
-        self.VOLATILITY_MULTIPLIER = 20.0
+        # Volatility multiplier from config (reduced to avoid insufficient funds)
+        self.VOLATILITY_MULTIPLIER = config.get('volatility_multiplier', 2)
         
         # Trading state
         symbol = config.get('symbol', 'BTC/USDC')
