@@ -350,6 +350,26 @@ class SimpleRSIStrategy:
         if self.current_position != 'long' or self.last_buy_price is None:
             return
         
+        # Check actual ETH balance before attempting to sell
+        try:
+            balance = self.exchange.fetch_balance()
+            eth_balance = balance.get('ETH', {}).get('free', 0)
+            bot_logger.info(f"Actual ETH balance: {eth_balance:.6f}, Attempting to sell: {self.position_size:.6f}")
+            
+            if eth_balance < self.position_size:
+                bot_logger.warning(f"Insufficient ETH balance. Have: {eth_balance:.6f}, Need: {self.position_size:.6f}")
+                # Adjust sell amount to actual available balance
+                if eth_balance > 0:
+                    self.position_size = eth_balance
+                    bot_logger.info(f"Adjusted sell amount to available balance: {self.position_size:.6f}")
+                else:
+                    bot_logger.error("No ETH available to sell, skipping real order")
+                    # Fall back to paper trading
+                    self._execute_paper_sell(current_price, reason)
+                    return
+        except Exception as e:
+            bot_logger.error(f"Error checking ETH balance: {e}")
+        
         # Execute real sell order on exchange
         try:
             order = self.exchange.create_market_sell_order(self.symbol, self.position_size)
@@ -358,6 +378,8 @@ class SimpleRSIStrategy:
             bot_logger.error(f"Failed to place real sell order: {e}")
             # Fall back to paper trading if order fails
             bot_logger.warning("Falling back to paper trading for this order")
+            self._execute_paper_sell(current_price, reason)
+            return
         
         # Calculate profit/loss
         profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
@@ -403,6 +425,51 @@ class SimpleRSIStrategy:
         self.save_capital_state()
         
         return profit_amount
+    
+    def _execute_paper_sell(self, current_price, reason):
+        """Execute paper trading sell when real order fails"""
+        # Calculate profit/loss
+        profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+        profit_amount = (current_price - self.last_buy_price) * self.position_size
+        
+        # Update statistics
+        self.trade_count += 1
+        self.profit_loss += profit_amount
+        self.current_capital += profit_amount
+        
+        if profit_amount > 0:
+            self.consecutive_wins += 1
+            self.consecutive_losses = 0
+            if profit_amount > self.best_trade_profit:
+                self.best_trade_profit = profit_amount
+        else:
+            self.consecutive_losses += 1
+            self.consecutive_wins = 0
+            if profit_amount < self.worst_trade_loss:
+                self.worst_trade_loss = profit_amount
+        
+        # Record trade
+        trade_record = {
+            'trade_number': self.trade_count,
+            'buy_price': self.last_buy_price,
+            'sell_price': current_price,
+            'position_size': self.position_size,
+            'profit': profit_amount,
+            'profit_pct': profit_pct,
+            'reason': f"{reason} (Paper Trading)"
+        }
+        self.trade_history.append(trade_record)
+        
+        bot_logger.info(f"[SELL #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} (Paper Trading) | Capital: ${self.current_capital:.2f}")
+        
+        # Reset position
+        self.current_position = None
+        self.last_buy_price = None
+        self.position_size = 0.0
+        self.highest_price_since_buy = None
+        
+        # Save state
+        self.save_capital_state()
     
     def handle_trade_event(self, current_price):
         """Main trading logic"""
