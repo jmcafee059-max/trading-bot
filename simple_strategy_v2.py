@@ -312,13 +312,29 @@ class SimpleRSIStrategy:
         
         # Execute real buy order on exchange
         try:
-            # Coinbase requires cost instead of amount for market buy orders
-            order = self.exchange.create_market_buy_order(self.symbol, trade_value)
+            # Coinbase requires cost parameter for market buy orders
+            # Use create_market_buy_order with cost parameter
+            order = self.exchange.create_market_buy_order(
+                self.symbol,
+                trade_value  # pass cost directly
+            )
             bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order.get('id', 'N/A')}")
         except Exception as e:
             bot_logger.error(f"Failed to place real buy order: {e}")
-            # Fall back to paper trading if order fails
-            bot_logger.warning("Falling back to paper trading for this order")
+            # Try alternative method with price
+            try:
+                order = self.exchange.create_order(
+                    self.symbol,
+                    'market',
+                    'buy',
+                    position_size,  # actual position size
+                    current_price  # current price
+                )
+                bot_logger.info(f"[REAL BUY ORDER PLACED (alt method)] Order ID: {order.get('id', 'N/A')}")
+            except Exception as e2:
+                bot_logger.error(f"Alternative method also failed: {e2}")
+                # Fall back to paper trading if order fails
+                bot_logger.warning("Falling back to paper trading for this order")
         
         self.current_position = 'long'
         self.last_buy_price = current_price

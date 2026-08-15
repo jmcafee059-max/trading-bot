@@ -91,6 +91,7 @@ def get_usdc_balance():
         exchange_class = getattr(ccxt, bot_config['exchange_id'])
         exchange_config = {
             'enableRateLimit': True,
+            'createMarketBuyOrderRequiresPrice': False,
             'apiKey': bot_config['api_key'],
             'secret': bot_config['secret_key'],
         }
@@ -130,7 +131,10 @@ def start_bot():
         
         # Initialize exchange
         exchange_class = getattr(ccxt, bot_config['exchange_id'])
-        exchange_config = {'enableRateLimit': True}
+        exchange_config = {
+            'enableRateLimit': True,
+            'createMarketBuyOrderRequiresPrice': False  # Allow Coinbase to accept cost directly
+        }
         
         # Only add API keys if they're provided and not placeholder
         if bot_config.get('api_key') and bot_config['api_key'] != 'your_api_key_here':
