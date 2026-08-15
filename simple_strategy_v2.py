@@ -73,18 +73,50 @@ class SimpleRSIStrategy:
         """Load capital state from file for persistence"""
         state_file = 'capital_state.json'
         try:
-            if os.path.exists(state_file):
-                with open(state_file, 'r') as f:
-                    state = json.load(f)
-                    self.current_capital = state.get('current_capital', self.starting_capital)
-                    self.trade_count = state.get('trade_count', 0)
-                    self.profit_loss = state.get('profit_loss', 0.0)
-                    self.consecutive_wins = state.get('consecutive_wins', 0)
-                    self.consecutive_losses = state.get('consecutive_losses', 0)
-                    bot_logger.info(f"Loaded capital state: {self.currency_symbol}{self.current_capital:.2f}, Trades: {self.trade_count}")
+            # If starting_capital is 'auto', fetch actual balance from exchange
+            if self.starting_capital == 'auto':
+                try:
+                    balance = self.exchange.fetch_balance()
+                    # Extract quote currency from symbol (e.g., USDC from UNI-USDC)
+                    quote_currency = self.symbol.split('/')[1] if '/' in self.symbol else self.symbol.split('-')[1]
+                    actual_balance = balance.get(quote_currency, {}).get('free', 0)
+                    if actual_balance > 0:
+                        self.current_capital = actual_balance
+                        bot_logger.info(f"Auto-detected {quote_currency} balance: {self.currency_symbol}{self.current_capital:.2f}")
+                    else:
+                        # Fallback to saved state if balance is 0
+                        if os.path.exists(state_file):
+                            with open(state_file, 'r') as f:
+                                state = json.load(f)
+                                self.current_capital = state.get('current_capital', 18)
+                                bot_logger.warning(f"Zero balance detected, using saved state: {self.currency_symbol}{self.current_capital:.2f}")
+                        else:
+                            self.current_capital = 18  # Default fallback
+                except Exception as e:
+                    bot_logger.error(f"Error fetching balance: {e}")
+                    # Fallback to saved state
+                    if os.path.exists(state_file):
+                        with open(state_file, 'r') as f:
+                            state = json.load(f)
+                            self.current_capital = state.get('current_capital', 18)
+                    else:
+                        self.current_capital = 18  # Default fallback
+            else:
+                # Use saved state if starting_capital is not auto
+                if os.path.exists(state_file):
+                    with open(state_file, 'r') as f:
+                        state = json.load(f)
+                        self.current_capital = state.get('current_capital', self.starting_capital)
+                        self.trade_count = state.get('trade_count', 0)
+                        self.profit_loss = state.get('profit_loss', 0.0)
+                        self.consecutive_wins = state.get('consecutive_wins', 0)
+                        self.consecutive_losses = state.get('consecutive_losses', 0)
+                        bot_logger.info(f"Loaded capital state: {self.currency_symbol}{self.current_capital:.2f}, Trades: {self.trade_count}")
+                else:
+                    self.current_capital = self.starting_capital
         except Exception as e:
             bot_logger.warning(f"Could not load capital state: {e}")
-            self.current_capital = self.starting_capital
+            self.current_capital = self.starting_capital if self.starting_capital != 'auto' else 18
     
     def save_capital_state(self):
         """Save capital state to file"""
