@@ -41,6 +41,19 @@ class SimpleRSIStrategy:
         self.volume_threshold = config.get('volume_threshold', 1.5)
         self.momentum_period = config.get('momentum_period', 14)
         
+        # Ultra-aggressive profit parameters
+        self.max_position_size = config.get('max_position_size', 0.5)  # Use 50% of capital max for safety
+        self.min_confidence_threshold = config.get('min_confidence_threshold', 0.5)  # Balanced threshold
+        self.profit_multiplier = config.get('profit_multiplier', 1.0)  # Conservative multiplier
+        self.aggressive_mode = config.get('aggressive_mode', False)  # Disabled by default for safety
+        
+        # Performance tracking for adaptive optimization
+        self.recent_trades = []
+        self.win_rate = 0.5
+        self.avg_profit = 0
+        self.avg_loss = 0
+        self.sharpe_ratio = 0
+        
         # Capital management
         self.starting_capital = config.get('starting_capital', 18)
         self.current_capital = self.starting_capital
@@ -142,9 +155,27 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"Could not save capital state: {e}")
     
     def calculate_position_size(self, current_price):
-        """Calculate position size with FIXED 5x volatility multiplier"""
-        # Calculate trade amount: Capital × Cap% (removed volatility multiplier from trade amount)
-        trade_amount = self.current_capital * (self.capital_percentage / 100)
+        """Calculate position size with dynamic sizing based on confidence and volatility"""
+        # Calculate base trade amount
+        base_trade_amount = self.current_capital * (self.capital_percentage / 100)
+        
+        # Calculate volatility-adjusted position size
+        if len(self.price_history) >= 14:
+            atr = self.calculate_atr(self.price_history)
+            volatility_ratio = atr / current_price if atr > 0 else 0.01
+            # Higher volatility = smaller position size for risk management
+            volatility_adjustment = max(0.5, min(2.0, 1 / (volatility_ratio * 10)))
+            trade_amount = base_trade_amount * volatility_adjustment
+        else:
+            trade_amount = base_trade_amount
+        
+        # Apply aggressive mode multiplier if enabled
+        if self.aggressive_mode:
+            trade_amount *= 1.5
+        
+        # Cap at maximum position size
+        max_allowed = self.current_capital * self.max_position_size
+        trade_amount = min(trade_amount, max_allowed)
         
         # Calculate position size in base currency
         position_size = trade_amount / current_price
@@ -155,12 +186,12 @@ class SimpleRSIStrategy:
         bot_logger.info(f"=== POSITION CALCULATION ===")
         bot_logger.info(f"Current Capital: ${self.current_capital:.2f}")
         bot_logger.info(f"Capital Percentage: {self.capital_percentage}%")
-        bot_logger.info(f"Volatility Multiplier: {self.VOLATILITY_MULTIPLIER}x")
-        bot_logger.info(f"Trade Amount: ${trade_amount:.2f}")
+        bot_logger.info(f"Base Trade Amount: ${base_trade_amount:.2f}")
+        bot_logger.info(f"Adjusted Trade Amount: ${trade_amount:.2f}")
         bot_logger.info(f"Current Price: ${current_price:.2f}")
         bot_logger.info(f"Position Size: {position_size:.6f}")
-        bot_logger.info(f"Expected Profit at 1%: ${trade_amount * 0.01:.2f}")
-        bot_logger.info(f"========================")
+        bot_logger.info(f"Expected Profit at {self.take_profit_pct}%: ${trade_amount * (self.take_profit_pct / 100):.2f}")
+        bot_logger.info(f"=========================")
         
         return max(position_size, min_position)
     
@@ -262,6 +293,48 @@ class SimpleRSIStrategy:
         except Exception as e:
             bot_logger.warning(f"Momentum calculation failed: {e}")
             return 0
+    
+    def calculate_kelly_position_size(self, win_rate, avg_win, avg_loss):
+        """Calculate optimal position size using Kelly Criterion"""
+        if avg_loss == 0:
+            return 0.5  # Conservative default
+        
+        kelly_fraction = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+        # Kelly can be aggressive, so use half-Kelly for safety
+        half_kelly = max(0.1, min(0.5, kelly_fraction * 0.5))
+        return half_kelly
+    
+    def detect_market_regime(self, prices):
+        """Detect market regime (trending, ranging, volatile)"""
+        if len(prices) < 20:
+            return "NEUTRAL"
+        
+        try:
+            df = pd.DataFrame({'price': prices})
+            sma_short = df['price'].rolling(window=10).mean().iloc[-1]
+            sma_long = df['price'].rolling(window=20).mean().iloc[-1]
+            std = df['price'].rolling(window=20).std().iloc[-1]
+            current_price = prices[-1]
+            
+            # Trend detection
+            if sma_short > sma_long and current_price > sma_short:
+                regime = "TRENDING_UP"
+            elif sma_short < sma_long and current_price < sma_short:
+                regime = "TRENDING_DOWN"
+            else:
+                regime = "RANGING"
+            
+            # Volatility detection
+            volatility = std / current_price if current_price > 0 else 0
+            if volatility > 0.05:
+                regime += "_HIGH_VOL"
+            elif volatility < 0.01:
+                regime += "_LOW_VOL"
+            
+            return regime
+        except Exception as e:
+            bot_logger.warning(f"Market regime detection failed: {e}")
+            return "NEUTRAL"
     
     def calculate_atr(self, prices, period=14):
         """Calculate Average True Range for volatility"""
@@ -669,6 +742,7 @@ class SimpleRSIStrategy:
         momentum = self.calculate_momentum(self.price_history, self.momentum_period)
         atr = self.calculate_atr(self.price_history)
         trend = self.detect_trend(self.price_history)
+        market_regime = self.detect_market_regime(self.price_history)
         
         # Calculate RSI history for divergence detection
         rsi_history = [self.calculate_rsi(self.price_history[:i+1]) for i in range(len(self.price_history))]
@@ -695,7 +769,7 @@ class SimpleRSIStrategy:
         momentum_positive = momentum > 0
         atr_signal = atr > 0 and (current_price - self.last_buy_price) / self.last_buy_price < (atr / current_price) if self.last_buy_price else True
         
-        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | EMA: {'BULL' if ema_short > ema_long else 'BEAR'} | SMA: {'ABOVE' if price_above_sma else 'BELOW'} | Mom: {'POS' if momentum_positive else 'NEG'} | ATR: {atr:.4f} | Vol: {self.VOLATILITY_MULTIPLIER}x")
+        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | EMA: {'BULL' if ema_short > ema_long else 'BEAR'} | SMA: {'ABOVE' if price_above_sma else 'BELOW'} | Mom: {'POS' if momentum_positive else 'NEG'} | ATR: {atr:.4f} | Regime: {market_regime} | Vol: {self.VOLATILITY_MULTIPLIER}x")
         
         # Trading logic
         if self.current_position is None:
@@ -750,11 +824,36 @@ class SimpleRSIStrategy:
             if bullish_breakout:
                 bullish_signals += 1
             
+            # Market regime bonus/penalty
+            total_signals += 1
+            if "TRENDING_UP" in market_regime:
+                bullish_signals += 1
+            elif "TRENDING_DOWN" in market_regime:
+                bullish_signals -= 0.5
+            
+            # Volatility adjustment
+            if "HIGH_VOL" in market_regime:
+                # Be more cautious in high volatility
+                total_signals += 0.5
+            elif "LOW_VOL" in market_regime:
+                # Can be more aggressive in low volatility
+                total_signals -= 0.5
+            
             # Calculate bullish percentage
             bullish_pct = (bullish_signals / total_signals) * 100 if total_signals > 0 else 0
             
-            # Buy if majority of signals are bullish (60%+)
-            should_buy = bullish_pct >= 60 or self.trade_count == 0
+            # Adaptive threshold based on recent performance
+            if len(self.recent_trades) >= 5:
+                recent_wins = sum(1 for t in self.recent_trades[-5:] if t['profit'] > 0)
+                if recent_wins >= 4:  # Hot streak - be more aggressive
+                    self.min_confidence_threshold = 0.35
+                elif recent_wins <= 1:  # Cold streak - be more conservative
+                    self.min_confidence_threshold = 0.65
+                else:
+                    self.min_confidence_threshold = 0.5
+            
+            # Buy if majority of signals are bullish (adaptive threshold)
+            should_buy = bullish_pct >= (self.min_confidence_threshold * 100) or self.trade_count == 0
             
             bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | ShouldBuy={should_buy}")
             

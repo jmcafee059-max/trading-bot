@@ -39,6 +39,10 @@ bot_config = {
     'sma_period': int(os.getenv('SMA_PERIOD', '50')),
     'volume_threshold': float(os.getenv('VOLUME_THRESHOLD', '1.5')),
     'momentum_period': int(os.getenv('MOMENTUM_PERIOD', '14')),
+    'max_position_size': float(os.getenv('MAX_POSITION_SIZE', '0.5')),
+    'min_confidence_threshold': float(os.getenv('MIN_CONFIDENCE_THRESHOLD', '0.5')),
+    'profit_multiplier': float(os.getenv('PROFIT_MULTIPLIER', '1.0')),
+    'aggressive_mode': os.getenv('AGGRESSIVE_MODE', 'false').lower() == 'true',
 }
 
 @app.route('/')
@@ -75,6 +79,10 @@ def update_config():
         'SMA_PERIOD': str(bot_config['sma_period']),
         'VOLUME_THRESHOLD': str(bot_config['volume_threshold']),
         'MOMENTUM_PERIOD': str(bot_config['momentum_period']),
+        'MAX_POSITION_SIZE': str(bot_config['max_position_size']),
+        'MIN_CONFIDENCE_THRESHOLD': str(bot_config['min_confidence_threshold']),
+        'PROFIT_MULTIPLIER': str(bot_config['profit_multiplier']),
+        'AGGRESSIVE_MODE': str(bot_config['aggressive_mode']).lower(),
     }
     
     with open('.env', 'w') as f:
@@ -100,6 +108,10 @@ def update_config():
         f.write(f"SMA_PERIOD={env_updates['SMA_PERIOD']}\n")
         f.write(f"VOLUME_THRESHOLD={env_updates['VOLUME_THRESHOLD']}\n")
         f.write(f"MOMENTUM_PERIOD={env_updates['MOMENTUM_PERIOD']}\n")
+        f.write(f"MAX_POSITION_SIZE={env_updates['MAX_POSITION_SIZE']}\n")
+        f.write(f"MIN_CONFIDENCE_THRESHOLD={env_updates['MIN_CONFIDENCE_THRESHOLD']}\n")
+        f.write(f"PROFIT_MULTIPLIER={env_updates['PROFIT_MULTIPLIER']}\n")
+        f.write(f"AGGRESSIVE_MODE={env_updates['AGGRESSIVE_MODE']}\n")
     
     return jsonify({'success': True, 'config': bot_config})
 
