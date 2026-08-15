@@ -225,6 +225,29 @@ def manual_sell():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/bot/settings', methods=['GET'])
+def get_settings():
+    """Get current trading settings"""
+    try:
+        env_path = '.env'
+        settings = {}
+        
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        settings[key] = value
+        
+        return jsonify({
+            'success': True,
+            'symbol': settings.get('SYMBOL', 'BTC/USDT'),
+            'volatility_multiplier': int(settings.get('VOLATILITY_MULTIPLIER', '20'))
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/bot/settings', methods=['POST'])
 def update_settings():
     """Update trading settings (symbol and volatility multiplier)"""

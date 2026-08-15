@@ -331,6 +331,21 @@
             }
         }
 
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/bot/settings');
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('tradingPair').value = data.symbol;
+                    document.getElementById('volatilityMultiplier').value = data.volatility_multiplier;
+                    updateVolatilityDisplay();
+                }
+            } catch (error) {
+                console.error('Error loading settings:', error);
+            }
+        }
+
         function updateVolatilityDisplay() {
             const value = document.getElementById('volatilityMultiplier').value;
             document.getElementById('volatilityValue').textContent = value + 'x';
@@ -556,6 +571,7 @@
         }
 
         initChart();
+        loadSettings();
         fetchStatus();
         fetchTrades();
         fetchLogs();
