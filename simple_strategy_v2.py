@@ -312,7 +312,8 @@ class SimpleRSIStrategy:
         
         # Execute real buy order on exchange
         try:
-            order = self.exchange.create_market_buy_order(self.symbol, position_size)
+            # Coinbase requires cost instead of amount for market buy orders
+            order = self.exchange.create_market_buy_order(self.symbol, trade_value)
             bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order.get('id', 'N/A')}")
         except Exception as e:
             bot_logger.error(f"Failed to place real buy order: {e}")
