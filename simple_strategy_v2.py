@@ -336,6 +336,74 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"Market regime detection failed: {e}")
             return "NEUTRAL"
     
+    def detect_engulfing_pattern(self, prices):
+        """Detect engulfing candle patterns - highly reliable for gold trading"""
+        try:
+            if len(prices) < 2:
+                return None
+            
+            # Get last two candles
+            current_price = prices[-1]
+            previous_price = prices[-2]
+            
+            # Need OHLC data for proper candle analysis
+            # Since we only have closing prices, we'll use a simplified approach
+            # based on price direction and magnitude
+            
+            # Calculate price changes
+            current_change = current_price - prices[-2] if len(prices) >= 2 else 0
+            previous_change = prices[-2] - prices[-3] if len(prices) >= 3 else 0
+            
+            # Bullish engulfing: previous was down, current is up with larger magnitude
+            if previous_change < 0 and current_change > 0:
+                if abs(current_change) > abs(previous_change):
+                    return "BULLISH_ENGULFING"
+            
+            # Bearish engulfing: previous was up, current is down with larger magnitude
+            elif previous_change > 0 and current_change < 0:
+                if abs(current_change) > abs(previous_change):
+                    return "BEARISH_ENGULFING"
+            
+            return None
+        except Exception as e:
+            bot_logger.warning(f"Engulfing pattern detection failed: {e}")
+            return None
+    
+    def detect_pin_bar(self, prices):
+        """Detect pin bar (rejection candle) patterns - clean signals for gold"""
+        try:
+            if len(prices) < 3:
+                return None
+            
+            # Simplified pin bar detection using price changes
+            # In real implementation, would need OHLC data for wick analysis
+            current = prices[-1]
+            previous = prices[-2]
+            before_previous = prices[-3]
+            
+            # Calculate recent volatility
+            recent_range = max(prices[-10:]) - min(prices[-10:]) if len(prices) >= 10 else 0
+            
+            if recent_range == 0:
+                return None
+            
+            # Bullish pin bar: price dropped then recovered (lower wick)
+            if before_previous > previous and current > previous:
+                rejection_ratio = (before_previous - previous) / recent_range
+                if rejection_ratio > 0.3:  # Significant rejection
+                    return "BULLISH_PIN_BAR"
+            
+            # Bearish pin bar: price rose then rejected (upper wick)
+            elif before_previous < previous and current < previous:
+                rejection_ratio = (previous - before_previous) / recent_range
+                if rejection_ratio > 0.3:  # Significant rejection
+                    return "BEARISH_PIN_BAR"
+            
+            return None
+        except Exception as e:
+            bot_logger.warning(f"Pin bar detection failed: {e}")
+            return None
+    
     def calculate_atr(self, prices, period=14):
         """Calculate Average True Range for volatility"""
         try:
@@ -751,6 +819,8 @@ class SimpleRSIStrategy:
         rsi_divergence = self.detect_rsi_divergence(self.price_history, rsi_history)
         support, resistance = self.detect_support_resistance(self.price_history)
         bullish_breakout, bearish_breakdown = self.detect_breakout(current_price, support, resistance)
+        engulfing_pattern = self.detect_engulfing_pattern(self.price_history)
+        pin_bar = self.detect_pin_bar(self.price_history)
         
         if rsi is None or ema_short is None or ema_long is None:
             return
@@ -769,7 +839,7 @@ class SimpleRSIStrategy:
         momentum_positive = momentum > 0
         atr_signal = atr > 0 and (current_price - self.last_buy_price) / self.last_buy_price < (atr / current_price) if self.last_buy_price else True
         
-        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | EMA: {'BULL' if ema_short > ema_long else 'BEAR'} | SMA: {'ABOVE' if price_above_sma else 'BELOW'} | Mom: {'POS' if momentum_positive else 'NEG'} | ATR: {atr:.4f} | Regime: {market_regime} | Vol: {self.VOLATILITY_MULTIPLIER}x")
+        bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | EMA: {'BULL' if ema_short > ema_long else 'BEAR'} | SMA: {'ABOVE' if price_above_sma else 'BELOW'} | Mom: {'POS' if momentum_positive else 'NEG'} | ATR: {atr:.4f} | Regime: {market_regime} | Engulfing: {engulfing_pattern or 'NONE'} | PinBar: {pin_bar or 'NONE'} | Vol: {self.VOLATILITY_MULTIPLIER}x")
         
         # Trading logic
         if self.current_position is None:
@@ -823,6 +893,20 @@ class SimpleRSIStrategy:
             total_signals += 1
             if bullish_breakout:
                 bullish_signals += 1
+            
+            # Engulfing pattern - highly reliable for gold
+            total_signals += 2  # Give it more weight
+            if engulfing_pattern == "BULLISH_ENGULFING":
+                bullish_signals += 2  # Strong signal
+            elif engulfing_pattern == "BEARISH_ENGULFING":
+                bullish_signals -= 1  # Negative signal
+            
+            # Pin bar - clean signals for gold
+            total_signals += 1
+            if pin_bar == "BULLISH_PIN_BAR":
+                bullish_signals += 1
+            elif pin_bar == "BEARISH_PIN_BAR":
+                bullish_signals -= 0.5
             
             # Market regime bonus/penalty
             total_signals += 1
