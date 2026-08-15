@@ -322,7 +322,7 @@
                 btnText.textContent = 'Stop Bot';
                 btn.className = 'card p-6 text-center btn-danger text-2xl font-bold';
                 btn.innerHTML = '<i class="fas fa-stop mr-3"></i><span id="startBotText">Stop Bot</span>';
-                manualSellBtn.classList.remove('hidden');
+                // Don't show manual sell button here - let fetchStatus handle it based on actual position
             } else {
                 btnText.textContent = 'Start Bot';
                 btn.className = 'card p-6 text-center btn-primary text-2xl font-bold';
@@ -353,13 +353,14 @@
                 
                 if (data.success) {
                     alert('Settings saved successfully! Bot will restart with new settings.');
-                    location.reload();
+                    // Reload page to apply changes
+                    setTimeout(() => location.reload(), 1000);
                 } else {
-                    alert('Failed to save settings');
+                    alert('Failed to save settings: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('Failed to save settings');
+                alert('Failed to save settings. Please try again.');
             }
         }
 

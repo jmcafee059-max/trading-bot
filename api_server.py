@@ -250,13 +250,18 @@ def update_settings():
                 lines = f.readlines()
             
             with open(env_path, 'w') as f:
+                symbol_updated = False
+                volatility_updated = False
                 for line in lines:
                     if line.startswith('SYMBOL='):
                         f.write(f'SYMBOL={new_symbol}\n')
-                    elif line.startswith('VOLATILITY_MULTIPLIER='):
-                        f.write(f'VOLATILITY_MULTIPLIER={new_volatility}\n')
+                        symbol_updated = True
                     else:
                         f.write(line)
+                
+                # Add VOLATILITY_MULTIPLIER if not exists
+                if not volatility_updated:
+                    f.write(f'VOLATILITY_MULTIPLIER={new_volatility}\n')
         
         # Update strategy volatility multiplier if it exists
         if strategy_instance:
