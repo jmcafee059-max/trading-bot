@@ -9,42 +9,64 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Conv1D, MaxPooling1D, Flatten
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.neural_network import MLPRegressor, MLPClassifier
 import joblib
 import os
 import logging
 
 ml_logger = logging.getLogger(__name__)
 
+# Try to import TensorFlow, use fallback if not available
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    ml_logger.warning("TensorFlow not available, using scikit-learn fallback")
+
 class PricePredictionLSTM:
-    """LSTM model for price prediction"""
+    """LSTM model for price prediction (with scikit-learn fallback)"""
     
     def __init__(self, sequence_length=60, features=10):
         self.sequence_length = sequence_length
         self.features = features
         self.model = None
         self.scaler = MinMaxScaler()
+        self.use_fallback = not TENSORFLOW_AVAILABLE
         
     def build_model(self):
-        """Build LSTM architecture"""
-        model = Sequential([
-            LSTM(128, return_sequences=True, input_shape=(self.sequence_length, self.features)),
-            Dropout(0.2),
-            LSTM(64, return_sequences=True),
-            Dropout(0.2),
-            LSTM(32, return_sequences=False),
-            Dropout(0.2),
-            Dense(16, activation='relu'),
-            Dense(1, activation='linear')
-        ])
-        
-        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-        self.model = model
-        return model
+        """Build LSTM architecture or fallback to MLP"""
+        if self.use_fallback:
+            # Use scikit-learn MLPRegressor as fallback
+            self.model = MLPRegressor(
+                hidden_layer_sizes=(128, 64, 32),
+                activation='relu',
+                solver='adam',
+                max_iter=1000,
+                random_state=42
+            )
+            ml_logger.info("Using scikit-learn MLPRegressor as fallback")
+            return self.model
+        else:
+            # Use TensorFlow LSTM
+            from tensorflow.keras.models import Sequential
+            from tensorflow.keras.layers import LSTM, Dense, Dropout
+            
+            model = Sequential([
+                LSTM(128, return_sequences=True, input_shape=(self.sequence_length, self.features)),
+                Dropout(0.2),
+                LSTM(64, return_sequences=True),
+                Dropout(0.2),
+                LSTM(32, return_sequences=False),
+                Dropout(0.2),
+                Dense(16, activation='relu'),
+                Dense(1, activation='linear')
+            ])
+            
+            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+            self.model = model
+            return model
     
     def prepare_data(self, df, target_column='close'):
         """Prepare data for LSTM training"""
@@ -74,7 +96,7 @@ class PricePredictionLSTM:
         return np.array(X), np.array(y)
     
     def train(self, df, target_column='close', epochs=50, batch_size=32):
-        """Train LSTM model"""
+        """Train LSTM model (or fallback MLP)"""
         X, y = self.prepare_data(df, target_column)
         
         if self.model is None:
@@ -83,21 +105,39 @@ class PricePredictionLSTM:
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
         
-        # Callbacks
-        early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+        if self.use_fallback:
+            # Train scikit-learn MLPRegressor
+            # Flatten sequences for MLPRegressor
+            X_train_flat = X_train.reshape(X_train.shape[0], -1)
+            X_test_flat = X_test.reshape(X_test.shape[0], -1)
+            
+            self.model.fit(X_train_flat, y_train)
+            
+            # Evaluate
+            y_pred = self.model.predict(X_test_flat)
+            mae = np.mean(np.abs(y_pred - y_test))
+            
+            ml_logger.info(f"MLPRegressor trained. MAE: {mae:.4f}")
+        else:
+            # Train TensorFlow LSTM
+            from tensorflow.keras.callbacks import EarlyStopping
+            
+            # Callbacks
+            early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+            
+            # Train
+            history = self.model.fit(
+                X_train, y_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                validation_data=(X_test, y_test),
+                callbacks=[early_stopping],
+                verbose=1
+            )
+            
+            ml_logger.info(f"LSTM Model trained. Final validation loss: {history.history['val_loss'][-1]:.4f}")
         
-        # Train
-        history = self.model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_data=(X_test, y_test),
-            callbacks=[early_stopping],
-            verbose=1
-        )
-        
-        ml_logger.info(f"LSTM Model trained. Final validation loss: {history.history['val_loss'][-1]:.4f}")
-        return history
+        return self.model
     
     def predict(self, df):
         """Predict next price"""
@@ -109,25 +149,40 @@ class PricePredictionLSTM:
             return None
         
         # Get last sequence
-        last_sequence = X[-1:].reshape(1, self.sequence_length, self.features)
-        prediction = self.model.predict(last_sequence, verbose=0)
+        last_sequence = X[-1:]
         
-        return prediction[0][0]
+        if self.use_fallback:
+            # Flatten for MLPRegressor
+            last_sequence_flat = last_sequence.reshape(1, -1)
+            prediction = self.model.predict(last_sequence_flat)
+            return prediction[0]
+        else:
+            # Use TensorFlow LSTM
+            last_sequence_reshaped = last_sequence.reshape(1, self.sequence_length, self.features)
+            prediction = self.model.predict(last_sequence_reshaped, verbose=0)
+            return prediction[0][0]
     
-    def save(self, path='lstm_model.h5'):
+    def save(self, path='lstm_model'):
         """Save model and scaler"""
         if self.model:
-            self.model.save(path)
+            if self.use_fallback:
+                joblib.dump(self.model, f'{path}.pkl')
+            else:
+                self.model.save(f'{path}.h5')
             joblib.dump(self.scaler, 'lstm_scaler.pkl')
             ml_logger.info(f"LSTM model saved to {path}")
     
-    def load(self, path='lstm_model.h5'):
+    def load(self, path='lstm_model'):
         """Load model and scaler"""
-        if os.path.exists(path):
-            self.model = keras.models.load_model(path)
+        try:
+            if self.use_fallback:
+                self.model = joblib.load(f'{path}.pkl')
+            else:
+                from tensorflow.keras.models import load_model
+                self.model = load_model(f'{path}.h5')
             self.scaler = joblib.load('lstm_scaler.pkl')
             ml_logger.info(f"LSTM model loaded from {path}")
-        else:
+        except Exception as e:
             ml_logger.warning(f"LSTM model file not found: {path}")
 
 
@@ -163,6 +218,10 @@ class SignalConfirmationRF:
         df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
         
         # Drop NaN
+        df = df.dropna()
+        
+        # Handle infinity values
+        df = df.replace([np.inf, -np.inf], np.nan)
         df = df.dropna()
         
         feature_cols = [col for col in df.columns if col not in ['target', 'timestamp']]

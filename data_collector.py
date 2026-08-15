@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 import json
 from dotenv import load_dotenv
+import yfinance as yf
 
 load_dotenv()
 
@@ -30,11 +31,20 @@ class DataCollector:
         """Initialize exchange connection"""
         try:
             exchange_class = getattr(ccxt, self.exchange_id)
+            # Try without API keys first for public data
             exchange_config = {
                 'enableRateLimit': True,
-                'apiKey': os.getenv('API_KEY'),
-                'secret': os.getenv('SECRET_KEY'),
             }
+            
+            # Only add API keys if they're available
+            api_key = os.getenv('API_KEY')
+            secret_key = os.getenv('SECRET_KEY')
+            
+            if api_key and api_key != 'your_api_key_here':
+                exchange_config['apiKey'] = api_key
+            if secret_key and secret_key != 'your_secret_key_here':
+                exchange_config['secret'] = secret_key
+            
             return exchange_class(exchange_config)
         except Exception as e:
             data_logger.error(f"Failed to initialize exchange: {e}")
@@ -42,68 +52,103 @@ class DataCollector:
     
     def fetch_ohlcv_data(self, timeframe='1h', limit=1000):
         """Fetch OHLCV data from exchange"""
-        if not self.exchange:
-            return None
-        
+        # Use yfinance directly for reliable data access
+        return self._fetch_yfinance_data(timeframe, limit)
+    
+    def _fetch_yfinance_data(self, timeframe='1h', limit=1000):
+        """Fetch data using yfinance as fallback"""
         try:
-            ohlcv = self.exchange.fetch_ohlcv(self.symbol, timeframe, limit=limit)
+            # Convert symbol for yfinance
+            yf_symbol = self._convert_to_yfinance_symbol()
             
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
+            # Calculate date range
+            end_date = datetime.now()
+            if timeframe == '1h':
+                start_date = end_date - timedelta(days=limit // 24)
+            elif timeframe == '1d':
+                start_date = end_date - timedelta(days=limit)
+            else:
+                start_date = end_date - timedelta(days=30)
             
-            data_logger.info(f"Fetched {len(df)} candles for {self.symbol}")
-            return df
+            # Fetch data
+            data = yf.download(yf_symbol, start=start_date, end=end_date, interval='1h')
+            
+            if data.empty:
+                data_logger.warning(f"No data found for {yf_symbol}")
+                return None
+            
+            # Rename columns to match expected format
+            data = data.rename(columns={
+                'Open': 'open',
+                'High': 'high', 
+                'Low': 'low',
+                'Close': 'close',
+                'Volume': 'volume'
+            })
+            
+            # Keep only needed columns
+            data = data[['open', 'high', 'low', 'close', 'volume']]
+            
+            data_logger.info(f"Fetched {len(data)} candles from yfinance for {yf_symbol}")
+            return data
             
         except Exception as e:
-            data_logger.error(f"Failed to fetch OHLCV data: {e}")
+            data_logger.error(f"Failed to fetch yfinance data: {e}")
             return None
     
+    def _convert_to_yfinance_symbol(self):
+        """Convert trading symbol to yfinance format"""
+        # Handle different symbol formats
+        symbol = self.symbol.replace('-', '')  # Remove dash
+        
+        # Common crypto conversions
+        conversions = {
+            'DOGEUSDC': 'DOGE-USD',
+            'BTCUSDC': 'BTC-USD',
+            'ETHUSDC': 'ETH-USD',
+            'SOLUSDC': 'SOL-USD',
+        }
+        
+        return conversions.get(symbol, symbol)
+    
     def fetch_historical_data(self, days=30, timeframe='1h'):
-        """Fetch historical data for training"""
-        all_data = []
-        
-        # Calculate how many fetches needed
-        candles_per_fetch = 1000
-        candles_needed = days * 24  # Assuming 1h timeframe
-        fetches_needed = (candles_needed // candles_per_fetch) + 1
-        
-        since = None
-        
-        for i in range(fetches_needed):
-            try:
-                ohlcv = self.exchange.fetch_ohlcv(
-                    self.symbol, 
-                    timeframe, 
-                    limit=candles_per_fetch,
-                    since=since
-                )
-                
-                if not ohlcv:
-                    break
-                    
-                all_data.extend(ohlcv)
-                
-                # Update since for next fetch
-                since = ohlcv[-1][0] + 1
-                
-                data_logger.info(f"Fetched batch {i+1}/{fetches_needed}")
-                
-            except Exception as e:
-                data_logger.error(f"Error in batch {i+1}: {e}")
-                break
-        
-        if all_data:
-            df = pd.DataFrame(all_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            df = df.sort_index()
-            df = df[~df.index.duplicated(keep='last')]
+        """Fetch historical data for training using yfinance"""
+        try:
+            # Convert symbol for yfinance
+            yf_symbol = self._convert_to_yfinance_symbol()
             
-            data_logger.info(f"Total historical data collected: {len(df)} candles")
-            return df
-        
-        return None
+            # Calculate date range
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            
+            # Fetch data
+            data = yf.download(yf_symbol, start=start_date, end=end_date, interval='1h')
+            
+            if data.empty:
+                data_logger.warning(f"No data found for {yf_symbol}")
+                return None
+            
+            # Rename columns to match expected format
+            data = data.rename(columns={
+                'Open': 'open',
+                'High': 'high', 
+                'Low': 'low',
+                'Close': 'close',
+                'Volume': 'volume'
+            })
+            
+            # Keep only needed columns
+            data = data[['open', 'high', 'low', 'close', 'volume']]
+            
+            # Reset index to make timestamp a column
+            data = data.reset_index()
+            
+            data_logger.info(f"Fetched {len(data)} candles from yfinance for {yf_symbol}")
+            return data
+            
+        except Exception as e:
+            data_logger.error(f"Failed to fetch historical data: {e}")
+            return None
     
     def save_data(self, df, filename=None):
         """Save data to file"""
@@ -111,7 +156,7 @@ class DataCollector:
             filename = f"{self.symbol.replace('-', '_')}_{datetime.now().strftime('%Y%m%d')}.csv"
         
         filepath = os.path.join(self.data_dir, filename)
-        df.to_csv(filepath)
+        df.to_csv(filepath, index=False)
         data_logger.info(f"Data saved to {filepath}")
         return filepath
     
@@ -125,13 +170,14 @@ class DataCollector:
         return None
     
     def collect_training_data(self, days=30):
-        """Collect and save training data"""
+        """Collect and return training data"""
         data_logger.info(f"Collecting {days} days of training data for {self.symbol}")
         
         df = self.fetch_historical_data(days=days)
         if df is not None:
-            filepath = self.save_data(df)
-            return filepath
+            # Save the data as well
+            self.save_data(df)
+            return df
         
         return None
     
@@ -228,8 +274,9 @@ class TrainingPipeline:
         # Step 2: Prepare data for different models
         data_logger.info("Step 2: Preparing data for ML models...")
         
-        # For LSTM and Random Forest
-        training_data_path = self.collector.save_data(df, f'training_data_{self.symbol.replace("-", "_")}.csv')
+        # Save training data
+        training_filename = f'training_data_{self.symbol.replace("-", "_")}.csv'
+        training_data_path = self.collector.save_data(df, training_filename)
         
         # For Pattern Recognition
         sequences, labels = self.labeler.detect_and_label_patterns(df)
