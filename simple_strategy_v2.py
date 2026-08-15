@@ -643,77 +643,35 @@ class SimpleRSIStrategy:
             # Debug logging for sell logic
             bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
             
-            # Sell signals - MAXIMIZED with trading patterns
+            # Sell signals - SIMPLIFIED for profitability
             should_sell = False
             reason = ""
             
-            # FORCE SELL after 100 price ticks regardless of profit/loss (increased for 5% profit target)
-            if len(self.price_history) > 100 and self.current_position == 'long':
-                should_sell = True
-                reason = "Max Hold Time"
-                bot_logger.info(f"Forcing sell due to max hold time")
-            
-            # FORCE SELL if any profit > 5% (take profit target)
-            elif profit_pct > 5:
-                should_sell = True
-                reason = "Take Profit"
-                bot_logger.info(f"Take profit at {profit_pct:.2f}%")
-            
-            # Take profit
-            elif profit_pct >= self.take_profit_pct:
+            # Take profit - only sell when we hit target
+            if profit_pct >= self.take_profit_pct:
                 should_sell = True
                 reason = "Take Profit"
                 bot_logger.info(f"Take profit triggered at {profit_pct:.2f}%")
             
-            # Stop loss
+            # Stop loss - only sell if we're losing significantly
             elif profit_pct <= -self.stop_loss_pct:
                 should_sell = True
                 reason = "Stop Loss"
                 bot_logger.info(f"Stop loss triggered at {profit_pct:.2f}%")
             
-            # Trailing stop loss (0.5% below highest)
+            # Trailing stop loss - lock in profits when price drops 1% from peak
             elif self.highest_price_since_buy > self.last_buy_price:
                 trailing_stop_pct = ((self.highest_price_since_buy - current_price) / self.highest_price_since_buy) * 100
-                if trailing_stop_pct >= 0.5:
+                if trailing_stop_pct >= 1.0 and profit_pct > 2.0:
                     should_sell = True
                     reason = "Trailing Stop"
-                    bot_logger.info(f"Trailing stop triggered at {trailing_stop_pct:.2f}%")
+                    bot_logger.info(f"Trailing stop triggered at {trailing_stop_pct:.2f}% with profit {profit_pct:.2f}%")
             
-            # MACD bearish crossover (sell signal)
-            elif macd_bearish and profit_pct > 0:
+            # Only force sell after 200 ticks if we're losing significantly
+            elif len(self.price_history) > 200 and self.current_position == 'long' and profit_pct < -2.0:
                 should_sell = True
-                reason = "MACD Bearish"
-                bot_logger.info(f"MACD bearish crossover with profit {profit_pct:.2f}%")
-            
-            # Price near upper Bollinger Band (overbought)
-            elif price_near_upper and profit_pct > 0:
-                should_sell = True
-                reason = "BB Overbought"
-                bot_logger.info(f"Price near upper BB with profit {profit_pct:.2f}%")
-            
-            # RSI overbought with MACD bearish
-            elif rsi > self.rsi_overbought and macd_bearish and profit_pct > 0:
-                should_sell = True
-                reason = "RSI+MACD Overbought"
-                bot_logger.info(f"RSI overbought with MACD bearish, profit {profit_pct:.2f}%")
-            
-            # Bearish breakdown (price breaks support)
-            elif bearish_breakdown and profit_pct > 0:
-                should_sell = True
-                reason = "Bearish Breakdown"
-                bot_logger.info(f"Bearish breakdown with profit {profit_pct:.2f}%")
-            
-            # Price near resistance with profit
-            elif resistance and current_price >= resistance * 0.99 and profit_pct > 0:
-                should_sell = True
-                reason = "Near Resistance"
-                bot_logger.info(f"Price near resistance with profit {profit_pct:.2f}%")
-            
-            # FORCE SELL if profit > 3% (take partial profit)
-            elif profit_pct > 3:
-                should_sell = True
-                reason = "Partial Profit"
-                bot_logger.info(f"Partial profit at {profit_pct:.2f}%")
+                reason = "Max Hold Time (Loss)"
+                bot_logger.info(f"Forcing sell due to max hold time at loss {profit_pct:.2f}%")
             
             if should_sell:
                 self.place_sell_order(current_price, reason)
