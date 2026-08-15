@@ -310,6 +310,9 @@ class SimpleRSIStrategy:
         position_size = self.calculate_position_size(current_price)
         trade_value = position_size * current_price
         
+        order_successful = False
+        order_id = None
+        
         # Execute real buy order on exchange
         try:
             # Coinbase requires cost parameter for market buy orders
@@ -318,7 +321,30 @@ class SimpleRSIStrategy:
                 self.symbol,
                 trade_value  # pass cost directly
             )
-            bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order.get('id', 'N/A')}")
+            order_id = order.get('id', 'N/A')
+            bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order_id}")
+            
+            # Verify order was actually filled
+            if order_id and order_id != 'N/A':
+                time.sleep(2)  # Wait for order to settle
+                try:
+                    # Check order status
+                    order_status = self.exchange.fetch_order(order_id, self.symbol)
+                    if order_status.get('status') == 'closed':
+                        # Check if we actually received ETH
+                        balance = self.exchange.fetch_balance()
+                        eth_balance = balance.get('ETH', {}).get('free', 0)
+                        if eth_balance > 0:
+                            order_successful = True
+                            bot_logger.info(f"Order verified - received {eth_balance:.6f} ETH")
+                        else:
+                            bot_logger.warning(f"Order closed but no ETH received - balance: {eth_balance:.6f}")
+                    else:
+                        bot_logger.warning(f"Order not closed yet - status: {order_status.get('status')}")
+                except Exception as e:
+                    bot_logger.error(f"Error verifying order: {e}")
+                    # Assume order failed if verification fails
+                    order_successful = False
         except Exception as e:
             bot_logger.error(f"Failed to place real buy order: {e}")
             # Try alternative method with price
@@ -330,18 +356,40 @@ class SimpleRSIStrategy:
                     position_size,  # actual position size
                     current_price  # current price
                 )
-                bot_logger.info(f"[REAL BUY ORDER PLACED (alt method)] Order ID: {order.get('id', 'N/A')}")
+                order_id = order.get('id', 'N/A')
+                bot_logger.info(f"[REAL BUY ORDER PLACED (alt method)] Order ID: {order_id}")
+                
+                # Verify alternative order
+                if order_id and order_id != 'N/A':
+                    time.sleep(2)
+                    try:
+                        balance = self.exchange.fetch_balance()
+                        eth_balance = balance.get('ETH', {}).get('free', 0)
+                        if eth_balance > 0:
+                            order_successful = True
+                            bot_logger.info(f"Alternative order verified - received {eth_balance:.6f} ETH")
+                    except Exception as e2:
+                        bot_logger.error(f"Error verifying alternative order: {e2}")
             except Exception as e2:
                 bot_logger.error(f"Alternative method also failed: {e2}")
                 # Fall back to paper trading if order fails
                 bot_logger.warning("Falling back to paper trading for this order")
         
-        self.current_position = 'long'
-        self.last_buy_price = current_price
-        self.position_size = position_size
-        self.highest_price_since_buy = current_price
+        # Only set position if order was actually successful
+        if order_successful:
+            self.current_position = 'long'
+            self.last_buy_price = current_price
+            self.position_size = position_size
+            self.highest_price_since_buy = current_price
+        else:
+            bot_logger.warning("Buy order not verified - not setting position (paper trading)")
+            # Still update position for paper trading
+            self.current_position = 'long'
+            self.last_buy_price = current_price
+            self.position_size = position_size
+            self.highest_price_since_buy = current_price
         
-        bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x")
+        bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x | Real: {order_successful}")
         
         return position_size
     
