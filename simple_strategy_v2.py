@@ -930,14 +930,14 @@ class SimpleRSIStrategy:
             if len(self.recent_trades) >= 5:
                 recent_wins = sum(1 for t in self.recent_trades[-5:] if t['profit'] > 0)
                 if recent_wins >= 4:  # Hot streak - be more aggressive
-                    self.min_confidence_threshold = 0.25
+                    self.min_confidence_threshold = 0.15
                 elif recent_wins <= 1:  # Cold streak - be more conservative
-                    self.min_confidence_threshold = 0.45
-                else:
                     self.min_confidence_threshold = 0.35
+                else:
+                    self.min_confidence_threshold = 0.25
             else:
-                # Default threshold for consistent buying
-                self.min_confidence_threshold = 0.25
+                # Default threshold for consistent buying - very permissive
+                self.min_confidence_threshold = 0.15
             
             # Buy if majority of signals are bullish (adaptive threshold)
             should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
