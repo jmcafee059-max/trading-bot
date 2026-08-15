@@ -647,17 +647,17 @@ class SimpleRSIStrategy:
             should_sell = False
             reason = ""
             
-            # FORCE SELL after 30 price ticks regardless of profit/loss
-            if len(self.price_history) > 30 and self.current_position == 'long':
+            # FORCE SELL after 100 price ticks regardless of profit/loss (increased for 5% profit target)
+            if len(self.price_history) > 100 and self.current_position == 'long':
                 should_sell = True
                 reason = "Max Hold Time"
                 bot_logger.info(f"Forcing sell due to max hold time")
             
-            # FORCE SELL if any profit > 0.5% (take quick profit)
-            elif profit_pct > 0.5:
+            # FORCE SELL if any profit > 5% (take profit target)
+            elif profit_pct > 5:
                 should_sell = True
-                reason = "Quick Profit"
-                bot_logger.info(f"Quick profit at {profit_pct:.2f}%")
+                reason = "Take Profit"
+                bot_logger.info(f"Take profit at {profit_pct:.2f}%")
             
             # Take profit
             elif profit_pct >= self.take_profit_pct:
