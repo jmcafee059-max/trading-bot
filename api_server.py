@@ -25,7 +25,7 @@ bot_config = {
     'secret_key': os.getenv('SECRET_KEY'),
     'symbol': os.getenv('SYMBOL', 'BTC/USDC'),
     'timeframe': os.getenv('TIMEFRAME', '15m'),
-    'starting_capital': float(os.getenv('STARTING_CAPITAL', '18')),
+    'starting_capital': float(os.getenv('STARTING_CAPITAL', '18')) if os.getenv('STARTING_CAPITAL', '18') != 'auto' else 18,
     'capital_percentage': float(os.getenv('CAPITAL_PERCENTAGE', '90')),
     'risk_percentage': float(os.getenv('RISK_PERCENTAGE', '2.0')),
     'rsi_period': int(os.getenv('RSI_PERIOD', '3')),
@@ -85,6 +85,35 @@ def update_config():
     
     return jsonify({'success': True, 'config': bot_config})
 
+def get_usdc_balance():
+    """Fetch available USDC balance from Coinbase account"""
+    try:
+        exchange_class = getattr(ccxt, bot_config['exchange_id'])
+        exchange_config = {
+            'enableRateLimit': True,
+            'apiKey': bot_config['api_key'],
+            'secret': bot_config['secret_key'],
+        }
+        exchange = exchange_class(exchange_config)
+        
+        # Fetch balance
+        balance = exchange.fetch_balance()
+        
+        # Get USDC balance
+        usdc_balance = balance.get('USDC', {}).get('free', 0)
+        
+        if usdc_balance > 0:
+            logging.info(f"Found USDC balance: ${usdc_balance:.2f}")
+            return float(usdc_balance)
+        else:
+            logging.warning("No USDC balance found, using default starting capital")
+            return float(bot_config['starting_capital'])
+            
+    except Exception as e:
+        logging.error(f"Error fetching USDC balance: {e}")
+        logging.info("Using default starting capital")
+        return float(bot_config['starting_capital'])
+
 @app.route('/api/bot/start', methods=['POST'])
 def start_bot():
     global bot_thread, bot_running, strategy_instance
@@ -93,6 +122,12 @@ def start_bot():
         return jsonify({'success': False, 'message': 'Bot is already running'})
     
     try:
+        # Fetch actual USDC balance from account
+        actual_capital = get_usdc_balance()
+        bot_config['starting_capital'] = actual_capital
+        
+        logging.info(f"Using actual USDC balance: ${actual_capital:.2f}")
+        
         # Initialize exchange
         exchange_class = getattr(ccxt, bot_config['exchange_id'])
         exchange_config = {'enableRateLimit': True}
@@ -109,7 +144,7 @@ def start_bot():
         exchange = exchange_class(exchange_config)
         exchange.load_markets()
         
-        # Initialize strategy
+        # Initialize strategy with actual capital
         strategy_instance = SimpleRSIStrategy(exchange, bot_config)
         
         bot_running = True
