@@ -332,14 +332,16 @@ class SimpleRSIStrategy:
                     # Check order status
                     order_status = self.exchange.fetch_order(order_id, self.symbol)
                     if order_status.get('status') == 'closed':
-                        # Check if we actually received ETH
+                        # Check if we actually received the base currency (SAND, ETH, etc.)
                         balance = self.exchange.fetch_balance()
-                        eth_balance = balance.get('ETH', {}).get('free', 0)
-                        if eth_balance > 0:
+                        # Extract base currency from symbol (e.g., SAND from SAND-USDC)
+                        base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+                        base_balance = balance.get(base_currency, {}).get('free', 0)
+                        if base_balance > 0:
                             order_successful = True
-                            bot_logger.info(f"Order verified - received {eth_balance:.6f} ETH")
+                            bot_logger.info(f"Order verified - received {base_balance:.6f} {base_currency}")
                         else:
-                            bot_logger.warning(f"Order closed but no ETH received - balance: {eth_balance:.6f}")
+                            bot_logger.warning(f"Order closed but no {base_currency} received - balance: {base_balance:.6f}")
                     else:
                         bot_logger.warning(f"Order not closed yet - status: {order_status.get('status')}")
                 except Exception as e:
@@ -365,10 +367,12 @@ class SimpleRSIStrategy:
                     time.sleep(2)
                     try:
                         balance = self.exchange.fetch_balance()
-                        eth_balance = balance.get('ETH', {}).get('free', 0)
-                        if eth_balance > 0:
+                        # Extract base currency from symbol (e.g., SAND from SAND-USDC)
+                        base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+                        base_balance = balance.get(base_currency, {}).get('free', 0)
+                        if base_balance > 0:
                             order_successful = True
-                            bot_logger.info(f"Alternative order verified - received {eth_balance:.6f} ETH")
+                            bot_logger.info(f"Alternative order verified - received {base_balance:.6f} {base_currency}")
                     except Exception as e2:
                         bot_logger.error(f"Error verifying alternative order: {e2}")
             except Exception as e2:
@@ -399,25 +403,27 @@ class SimpleRSIStrategy:
         if self.current_position != 'long' or self.last_buy_price is None:
             return
         
-        # Check actual ETH balance before attempting to sell
+        # Check actual base currency balance before attempting to sell
         try:
             balance = self.exchange.fetch_balance()
-            eth_balance = balance.get('ETH', {}).get('free', 0)
-            bot_logger.info(f"Actual ETH balance: {eth_balance:.6f}, Attempting to sell: {self.position_size:.6f}")
+            # Extract base currency from symbol (e.g., SAND from SAND-USDC)
+            base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+            base_balance = balance.get(base_currency, {}).get('free', 0)
+            bot_logger.info(f"Actual {base_currency} balance: {base_balance:.6f}, Attempting to sell: {self.position_size:.6f}")
             
-            if eth_balance < self.position_size:
-                bot_logger.warning(f"Insufficient ETH balance. Have: {eth_balance:.6f}, Need: {self.position_size:.6f}")
+            if base_balance < self.position_size:
+                bot_logger.warning(f"Insufficient {base_currency} balance. Have: {base_balance:.6f}, Need: {self.position_size:.6f}")
                 # Adjust sell amount to actual available balance
-                if eth_balance > 0:
-                    self.position_size = eth_balance
+                if base_balance > 0:
+                    self.position_size = base_balance
                     bot_logger.info(f"Adjusted sell amount to available balance: {self.position_size:.6f}")
                 else:
-                    bot_logger.error("No ETH available to sell, skipping real order")
+                    bot_logger.error(f"No {base_currency} available to sell, skipping real order")
                     # Fall back to paper trading
                     self._execute_paper_sell(current_price, reason)
                     return
         except Exception as e:
-            bot_logger.error(f"Error checking ETH balance: {e}")
+            bot_logger.error(f"Error checking {base_currency} balance: {e}")
         
         # Execute real sell order on exchange
         try:
