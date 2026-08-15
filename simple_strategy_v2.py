@@ -136,8 +136,8 @@ class SimpleRSIStrategy:
     
     def calculate_position_size(self, current_price):
         """Calculate position size with FIXED 5x volatility multiplier"""
-        # Calculate trade amount: Capital × Cap% × 5x Volatility
-        trade_amount = self.current_capital * (self.capital_percentage / 100) * self.VOLATILITY_MULTIPLIER
+        # Calculate trade amount: Capital × Cap% (removed volatility multiplier from trade amount)
+        trade_amount = self.current_capital * (self.capital_percentage / 100)
         
         # Calculate position size in base currency
         position_size = trade_amount / current_price
