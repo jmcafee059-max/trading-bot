@@ -314,20 +314,20 @@
         }
 
         function updateStatusUI() {
-            const dot = document.getElementById('statusDot');
-            const text = document.getElementById('statusText');
             const btn = document.getElementById('startBotBtn');
+            const btnText = document.getElementById('startBotText');
+            const manualSellBtn = document.getElementById('manualSellBtn');
             
             if (botRunning) {
-                dot.className = 'w-4 h-4 rounded-full bg-green-500';
-                text.textContent = 'Running';
-                btn.innerHTML = '<i class="fas fa-stop mr-2"></i>Stop Bot';
-                btn.className = 'btn-danger text-lg';
+                btnText.textContent = 'Stop Bot';
+                btn.className = 'card p-6 text-center btn-danger text-2xl font-bold';
+                btn.innerHTML = '<i class="fas fa-stop mr-3"></i><span id="startBotText">Stop Bot</span>';
+                manualSellBtn.classList.remove('hidden');
             } else {
-                dot.className = 'w-4 h-4 rounded-full bg-red-500';
-                text.textContent = 'Stopped';
-                btn.innerHTML = '<i class="fas fa-play mr-2"></i>Start Bot';
-                btn.className = 'btn-primary text-lg';
+                btnText.textContent = 'Start Bot';
+                btn.className = 'card p-6 text-center btn-primary text-2xl font-bold';
+                btn.innerHTML = '<i class="fas fa-play mr-3"></i><span id="startBotText">Start Bot</span>';
+                manualSellBtn.classList.add('hidden');
             }
         }
 
