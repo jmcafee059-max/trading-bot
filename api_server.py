@@ -15,6 +15,17 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler('bot_logs.log', maxBytes=1024*1024, backupCount=5),
+        logging.StreamHandler()  # Also log to console
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Global bot state
 bot_thread = None
 bot_running = False
@@ -195,14 +206,16 @@ def start_bot():
                     iteration_count += 1
                     ticker = exchange.fetch_ticker(bot_config['symbol'])
                     current_price = ticker['last']
+                    logging.info(f"Bot loop #{iteration_count}: Fetched price ${current_price:.2f} for {bot_config['symbol']}")
                     strategy_instance.handle_trade_event(current_price)
                     
                     if iteration_count % 5 == 0:
                         save_bot_state()
                     
                     time.sleep(30)
+                    logging.info(f"Bot loop #{iteration_count}: Waiting 30 seconds before next iteration...")
                 except Exception as e:
-                    print(f"Error in bot loop: {e}")
+                    logging.error(f"Error in bot loop #{iteration_count}: {e}")
                     time.sleep(15)
         
         bot_thread = threading.Thread(target=run_bot, daemon=True)
