@@ -89,21 +89,23 @@ class OpenAIMarketAnalyzer:
     def _create_analysis_prompt(self, market_summary: str) -> str:
         """Create analysis prompt for OpenAI"""
         prompt = f"""
-        Analyze the following cryptocurrency market data and provide a trading recommendation:
+        You are an aggressive cryptocurrency trader focused on finding WINNING trades. Analyze the market data and identify profitable opportunities.
         
         {market_summary}
         
+        Your goal: Find winning trades. Be aggressive in identifying buy opportunities when there's any positive momentum.
+        
         Based on this data, provide:
         1. Market sentiment (BULLISH/BEARISH/NEUTRAL)
-        2. Trading recommendation (BUY/SELL/HOLD)
-        3. Confidence level (1-10)
-        4. Brief reasoning
+        2. Trading recommendation (BUY/SELL/HOLD) - Prefer BUY over HOLD when there's any positive signal
+        3. Confidence level (1-10) - Higher confidence for strong buy signals
+        4. Brief reasoning - Focus on why this could be a winning trade
         
         Format your response as:
         SENTIMENT: [BULLISH/BEARISH/NEUTRAL]
         RECOMMENDATION: [BUY/SELL/HOLD]
         CONFIDENCE: [1-10]
-        REASONING: [brief explanation]
+        REASONING: [brief explanation focusing on profit potential]
         """
         return prompt
     
@@ -166,25 +168,25 @@ class OpenAIMarketAnalyzer:
             combined_score -= openai_signal['confidence']
             reasoning.append(f"OpenAI SELL (confidence: {openai_signal['confidence']})")
         
-        # ML signal contribution
-        if ml_buy_score >= 3:
+        # ML signal contribution - more aggressive thresholds
+        if ml_buy_score >= 2:  # Lowered from 3 for more frequent trades
             combined_score += ml_buy_score * 2
             reasoning.append(f"ML BUY (score: {ml_buy_score})")
-        elif ml_sell_score >= 3:
+        elif ml_sell_score >= 2:  # Lowered from 3 for more frequent trades
             combined_score -= ml_sell_score * 2
             reasoning.append(f"ML SELL (score: {ml_sell_score})")
         
-        # Determine final recommendation
-        if combined_score >= 8:
+        # Determine final recommendation - more aggressive thresholds
+        if combined_score >= 5:  # Lowered from 8 for more frequent trades
             final_recommendation = 'STRONG BUY'
             confidence = min(10, combined_score // 2)
-        elif combined_score >= 4:
+        elif combined_score >= 2:  # Lowered from 4 for more frequent trades
             final_recommendation = 'BUY'
             confidence = min(8, combined_score // 2)
-        elif combined_score <= -8:
+        elif combined_score <= -5:  # Lowered from -8 for more frequent trades
             final_recommendation = 'STRONG SELL'
             confidence = min(10, abs(combined_score) // 2)
-        elif combined_score <= -4:
+        elif combined_score <= -2:  # Lowered from -4 for more frequent trades
             final_recommendation = 'SELL'
             confidence = min(8, abs(combined_score) // 2)
         else:
