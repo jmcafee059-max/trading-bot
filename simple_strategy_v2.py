@@ -68,6 +68,8 @@ class SimpleRSIStrategy:
         # OpenAI Integration
         self.openai_analyzer = OpenAIMarketAnalyzer()
         self.openai_enabled = config.get('openai_enabled', False)
+        bot_logger.info(f"OpenAI enabled: {self.openai_enabled}")
+        bot_logger.info(f"OpenAI analyzer enabled: {self.openai_analyzer.enabled}")
         
         # Try to load pre-trained ML models
         if self.ml_enabled:
