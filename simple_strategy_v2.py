@@ -104,6 +104,13 @@ class SimpleRSIStrategy:
         self.use_setup_score = config.get('use_setup_score', True)
         self.min_setup_score = config.get('min_setup_score', 70)
         
+        # Partial profit taking parameters
+        self.use_partial_profit_taking = config.get('use_partial_profit_taking', True)
+        self.first_tp_percent = config.get('first_tp_percent', 0.5)
+        self.second_tp_percent = config.get('second_tp_percent', 1.0)
+        self.third_tp_percent = config.get('third_tp_percent', 2.0)
+        self.partial_tps_taken = []  # Track which partial TPs have been taken
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -890,6 +897,61 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"Volume SMA calculation failed: {e}")
             return 0
     
+    def handle_partial_profit_taking(self, current_price):
+        """Handle partial profit taking at predefined levels"""
+        if not self.use_partial_profit_taking or self.current_position != 'long':
+            return False
+        
+        if not self.last_buy_price:
+            return False
+        
+        profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+        
+        # First TP: 25% of position
+        if 'first' not in self.partial_tps_taken and profit_pct >= self.first_tp_percent:
+            partial_size = self.position_size * 0.25
+            self.position_size -= partial_size
+            self.partial_tps_taken.append('first')
+            
+            profit_amount = (current_price - self.last_buy_price) * partial_size
+            self.current_capital += profit_amount
+            
+            bot_logger.info(f"First partial TP taken: Sold {partial_size:.6f} at {current_price:.4f} (Profit: ${profit_amount:.2f}, {profit_pct:.2f}%)")
+            return True
+        
+        # Second TP: 25% of position
+        elif 'second' not in self.partial_tps_taken and profit_pct >= self.second_tp_percent:
+            partial_size = self.position_size * 0.25
+            self.position_size -= partial_size
+            self.partial_tps_taken.append('second')
+            
+            profit_amount = (current_price - self.last_buy_price) * partial_size
+            self.current_capital += profit_amount
+            
+            bot_logger.info(f"Second partial TP taken: Sold {partial_size:.6f} at {current_price:.4f} (Profit: ${profit_amount:.2f}, {profit_pct:.2f}%)")
+            return True
+        
+        # Third TP: 50% with trailing stop
+        elif 'third' not in self.partial_tps_taken and profit_pct >= self.third_tp_percent:
+            partial_size = self.position_size  # Remaining 50%
+            self.position_size -= partial_size
+            self.partial_tps_taken.append('third')
+            
+            profit_amount = (current_price - self.last_buy_price) * partial_size
+            self.current_capital += profit_amount
+            
+            bot_logger.info(f"Third partial TP taken: Sold {partial_size:.6f} at {current_price:.4f} (Profit: ${profit_amount:.2f}, {profit_pct:.2f}%)")
+            
+            # Reset position after final partial TP
+            self.current_position = None
+            self.last_buy_price = None
+            self.highest_price_since_buy = None
+            self.partial_tps_taken = []
+            
+            return True
+        
+        return False
+    
     def detect_trend(self, prices):
         """Detect overall trend using multiple indicators"""
         try:
@@ -1101,6 +1163,7 @@ class SimpleRSIStrategy:
             self.last_buy_price = current_price
             self.position_size = position_size
             self.highest_price_since_buy = current_price
+            self.partial_tps_taken = []  # Reset partial TPs for new position
         else:
             bot_logger.warning("Buy order not verified - not setting position (paper trading)")
             # Still update position for paper trading
@@ -1108,6 +1171,7 @@ class SimpleRSIStrategy:
             self.last_buy_price = current_price
             self.position_size = position_size
             self.highest_price_since_buy = current_price
+            self.partial_tps_taken = []  # Reset partial TPs for new position
         
         bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x | Real: {order_successful}")
         
@@ -1764,6 +1828,11 @@ class SimpleRSIStrategy:
             
             # Debug logging for sell logic
             bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
+            
+            # Handle partial profit taking before main sell logic
+            partial_tp_taken = self.handle_partial_profit_taking(current_price)
+            if partial_tp_taken:
+                return  # Exit after partial TP, position may be closed
             
             # Sell signals - IMPROVED TIMING with ATR-based TP/SL
             should_sell = False
