@@ -62,6 +62,7 @@ class SimpleRSIStrategy:
         self.ml_ensemble = MLTradingEnsemble()
         self.ml_enabled = config.get('ml_enabled', True)
         self.use_ml_signals = config.get('use_ml_signals', True)
+        self.ml_only = config.get('ml_only', False)
         
         # Try to load pre-trained ML models
         if self.ml_enabled:
@@ -956,10 +957,7 @@ class SimpleRSIStrategy:
                 # Default threshold for consistent buying - extremely permissive
                 self.min_confidence_threshold = 0.10
             
-            # Buy if majority of signals are bullish (adaptive threshold)
-            should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
-            
-            # ML Signal Integration
+            # ML-Primary Trading Decision
             if self.ml_enabled and self.use_ml_signals and len(self.price_history) >= 100:
                 try:
                     # Create DataFrame for ML prediction
@@ -976,33 +974,83 @@ class SimpleRSIStrategy:
                     if ml_signals:
                         bot_logger.info(f"ML Signals: {ml_signals}")
                         
-                        # Incorporate ML signals into decision
-                        ml_bullish_score = 0
+                        # ML-Primary Decision Logic
+                        ml_buy_score = 0
+                        ml_sell_score = 0
                         
                         # LSTM prediction (price direction)
                         if 'lstm' in ml_signals:
                             lstm_pred = ml_signals['lstm']
-                            if lstm_pred > current_price:
-                                ml_bullish_score += 2
+                            price_change_pct = ((lstm_pred - current_price) / current_price) * 100
+                            
+                            if price_change_pct > 0.5:  # Strong bullish prediction
+                                ml_buy_score += 3
+                            elif price_change_pct > 0.2:  # Moderate bullish
+                                ml_buy_score += 2
+                            elif price_change_pct < -0.5:  # Strong bearish
+                                ml_sell_score += 3
+                            elif price_change_pct < -0.2:  # Moderate bearish
+                                ml_sell_score += 2
                         
                         # Random Forest signal
                         if 'random_forest' in ml_signals:
                             rf_signal = ml_signals['random_forest']
-                            if rf_signal['signal'] == 1 and rf_signal['confidence'] > 0.6:
-                                ml_bullish_score += 3
+                            if rf_signal['signal'] == 1:
+                                if rf_signal['confidence'] > 0.7:
+                                    ml_buy_score += 4  # Strong buy signal
+                                elif rf_signal['confidence'] > 0.5:
+                                    ml_buy_score += 2  # Moderate buy signal
                             elif rf_signal['signal'] == 0:
-                                ml_bullish_score -= 2
+                                if rf_signal['confidence'] > 0.7:
+                                    ml_sell_score += 4  # Strong sell signal
+                                elif rf_signal['confidence'] > 0.5:
+                                    ml_sell_score += 2  # Moderate sell signal
                         
-                        # Adjust bullish percentage based on ML signals
-                        if ml_bullish_score > 0:
-                            bullish_pct = min(bullish_pct + (ml_bullish_score * 5), 100)
-                        elif ml_bullish_score < 0:
-                            bullish_pct = max(bullish_pct + (ml_bullish_score * 5), 0)
+                        # ML-Primary Decision
+                        if self.ml_only:
+                            # ML-Only Mode: Ignore traditional indicators completely
+                            if ml_buy_score >= 3:
+                                should_buy = True
+                                bullish_pct = 100  # ML-only mode
+                                bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
+                            elif ml_sell_score >= 3:
+                                should_buy = False
+                                bullish_pct = 0  # ML-only mode
+                                bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
+                            else:
+                                should_buy = False  # ML uncertain - don't trade
+                                bot_logger.info(f"ML-ONLY uncertain - no trade")
+                        else:
+                            # ML-Enhanced Mode: Use ML as primary, traditional as fallback
+                            if ml_buy_score >= 5:
+                                should_buy = True
+                                bullish_pct = 100  # Override traditional indicators
+                                bot_logger.info(f"ML STRONG BUY signal - score: {ml_buy_score}")
+                            elif ml_buy_score >= 2:
+                                should_buy = True
+                                bullish_pct = max(bullish_pct, 70)  # Boost confidence
+                                bot_logger.info(f"ML BUY signal - score: {ml_buy_score}")
+                            elif ml_sell_score >= 3:
+                                should_buy = False
+                                bullish_pct = 0  # Override traditional indicators
+                                bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
+                            else:
+                                # Fallback to traditional indicators if ML is uncertain
+                                should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                                bot_logger.info(f"ML uncertain - using traditional indicators")
                             
-                        bot_logger.info(f"ML-adjusted bullish percentage: {bullish_pct:.1f}%")
+                        bot_logger.info(f"Final bullish percentage: {bullish_pct:.1f}%")
                         
                 except Exception as e:
                     bot_logger.warning(f"ML signal integration failed: {e}")
+                    if self.ml_only:
+                        should_buy = False  # ML-only mode: don't trade if ML fails
+                    else:
+                        # Fallback to traditional indicators
+                        should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+            else:
+                # Use traditional indicators if ML not available
+                should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
             
             # Force buy if no trades yet and we have some bullish signals
             if self.trade_count == 0 and bullish_pct > 0:
