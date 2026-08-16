@@ -45,7 +45,7 @@ class OpenAIMarketAnalyzer:
             
             # Get OpenAI analysis
             response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are an expert cryptocurrency trading analyst. Analyze market conditions and provide trading signals."},
                     {"role": "user", "content": prompt}
