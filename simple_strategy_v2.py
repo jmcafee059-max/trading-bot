@@ -100,6 +100,10 @@ class SimpleRSIStrategy:
         self.use_relative_strength = config.get('use_relative_strength', True)
         self.relative_strength_weight = config.get('relative_strength_weight', 0.2)
         
+        # 100-point setup score system parameters
+        self.use_setup_score = config.get('use_setup_score', True)
+        self.min_setup_score = config.get('min_setup_score', 70)
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -228,6 +232,102 @@ class SimpleRSIStrategy:
                 json.dump(state, f)
         except Exception as e:
             bot_logger.warning(f"Could not save capital state: {e}")
+    
+    def calculate_setup_score(self, rsi, trend, ema_short, ema_long, macd_bullish, price_near_lower, 
+                             btc_weather, relative_strength, ml_buy_score, market_regime):
+        """Calculate 100-point setup score for trade quality assessment"""
+        if not self.use_setup_score:
+            return 100  # Disable scoring if not enabled
+        
+        score = 0
+        max_score = 100
+        
+        # RSI Score (0-15 points)
+        if rsi < 30:
+            score += 15  # Strongly oversold
+        elif rsi < 40:
+            score += 10  # Moderately oversold
+        elif rsi < 50:
+            score += 5   # Slightly oversold
+        elif rsi > 70:
+            score -= 10  # Overbought - penalty
+        
+        # Trend Score (0-15 points)
+        if trend == "BULLISH":
+            score += 15
+        elif trend == "NEUTRAL":
+            score += 5
+        elif trend == "BEARISH":
+            score -= 10
+        
+        # EMA Crossover Score (0-10 points)
+        if ema_short > ema_long:
+            score += 10
+        else:
+            score -= 5
+        
+        # MACD Score (0-10 points)
+        if macd_bullish:
+            score += 10
+        else:
+            score -= 5
+        
+        # Price Position Score (0-10 points)
+        if price_near_lower:
+            score += 10  # Near support
+        else:
+            score += 5   # Neutral position
+        
+        # BTC Market Weather Score (0-15 points)
+        if btc_weather and btc_weather['signal'] == 'STRONG_BULLISH':
+            score += 15
+        elif btc_weather and btc_weather['signal'] == 'BULLISH':
+            score += 10
+        elif btc_weather and btc_weather['signal'] == 'NEUTRAL':
+            score += 5
+        elif btc_weather and btc_weather['signal'] == 'BEARISH':
+            score -= 5
+        elif btc_weather and btc_weather['signal'] == 'STRONG_BEARISH':
+            score -= 15
+        
+        # Relative Strength Score (0-10 points)
+        if relative_strength and relative_strength['signal'] == 'STRONG_OUTPERFORMING':
+            score += 10
+        elif relative_strength and relative_strength['signal'] == 'OUTPERFORMING':
+            score += 7
+        elif relative_strength and relative_strength['signal'] == 'NEUTRAL':
+            score += 3
+        elif relative_strength and relative_strength['signal'] == 'UNDERPERFORMING':
+            score -= 3
+        elif relative_strength and relative_strength['signal'] == 'STRONG_UNDERPERFORMING':
+            score -= 7
+        
+        # ML Signal Score (0-15 points)
+        if ml_buy_score >= 5:
+            score += 15  # Strong ML signal
+        elif ml_buy_score >= 3:
+            score += 10  # Moderate ML signal
+        elif ml_buy_score >= 2:
+            score += 5   # Weak ML signal
+        elif ml_buy_score < 0:
+            score -= 10  # Bearish ML signal
+        
+        # Market Regime Score (0-10 points)
+        if 'TRENDING_UP' in market_regime:
+            score += 10
+        elif 'TRENDING' in market_regime:
+            score += 5
+        elif 'RANGING' in market_regime:
+            score += 0
+        elif 'SIDEWAYS' in market_regime:
+            score -= 5
+        
+        # Ensure score is within bounds
+        score = max(0, min(100, score))
+        
+        bot_logger.info(f"Setup Score: {score}/100 (RSI={rsi:.1f}, Trend={trend}, BTC={btc_weather['signal'] if btc_weather else 'N/A'}, RS={relative_strength['signal'] if relative_strength else 'N/A'}, ML={ml_buy_score})")
+        
+        return score
     
     def get_relative_strength(self, current_price):
         """Calculate relative strength of current pair vs BTC"""
@@ -1567,10 +1667,21 @@ class SimpleRSIStrategy:
                     bullish_pct *= (1 - self.relative_strength_weight * 0.5)
                     bot_logger.info(f"Underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
             
+            # Calculate 100-point setup score
+            setup_score = self.calculate_setup_score(
+                rsi, trend, ema_short, ema_long, macd_bullish, price_near_lower,
+                btc_weather, relative_strength, ml_buy_score if self.ml_enabled else 0, market_regime
+            )
+            
+            # Apply setup score filter
+            if self.use_setup_score and setup_score < self.min_setup_score:
+                should_buy = False
+                bot_logger.warning(f"Setup score too low: {setup_score} < {self.min_setup_score} - trade blocked")
+            
             # Use adaptive confidence threshold
             adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
             
-            bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
+            bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | Setup Score={setup_score}/100 | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
             
             if should_buy:
                 # Calculate trade amount for profitability check
