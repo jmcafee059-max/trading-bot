@@ -111,6 +111,13 @@ class SimpleRSIStrategy:
         self.third_tp_percent = config.get('third_tp_percent', 2.0)
         self.partial_tps_taken = []  # Track which partial TPs have been taken
         
+        # Don't trade engine parameters
+        self.use_dont_trade_engine = config.get('use_dont_trade_engine', True)
+        self.max_consecutive_losses = config.get('max_consecutive_losses', 3)
+        self.cooling_off_period = config.get('cooling_off_period_minutes', 30)
+        self.min_liquidity_threshold = config.get('min_liquidity_threshold', 1000000)
+        self.last_loss_time = 0
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -897,6 +904,38 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"Volume SMA calculation failed: {e}")
             return 0
     
+    def should_block_trade(self, current_price):
+        """Don't trade engine: check if trading should be blocked based on various filters"""
+        if not self.use_dont_trade_engine:
+            return False, "Don't trade engine disabled"
+        
+        # Check consecutive losses
+        if self.consecutive_losses >= self.max_consecutive_losses:
+            return True, f"Too many consecutive losses ({self.consecutive_losses})"
+        
+        # Check cooling off period after losses
+        if self.last_loss_time > 0:
+            time_since_loss = time.time() - self.last_loss_time
+            if time_since_loss < self.cooling_off_period * 60:
+                remaining_time = self.cooling_off_period * 60 - time_since_loss
+                return True, f"Cooling off period ({remaining_time/60:.1f} minutes remaining)"
+        
+        # Check minimum liquidity (placeholder - would need real volume data)
+        # For now, assume liquidity is sufficient
+        
+        # Check if capital is too low
+        if self.current_capital < 10:  # Minimum capital threshold
+            return True, "Capital too low for trading"
+        
+        # Check if win rate is too low (recent performance)
+        if len(self.recent_trades) >= 10:
+            recent_wins = sum(1 for trade in self.recent_trades[-10:] if trade['profit'] > 0)
+            recent_win_rate = recent_wins / 10
+            if recent_win_rate < 0.2:  # Less than 20% win rate in last 10 trades
+                return True, f"Recent win rate too low ({recent_win_rate*100:.0f}%)"
+        
+        return False, "All filters passed"
+    
     def handle_partial_profit_taking(self, current_price):
         """Handle partial profit taking at predefined levels"""
         if not self.use_partial_profit_taking or self.current_position != 'long':
@@ -1232,6 +1271,7 @@ class SimpleRSIStrategy:
         else:
             self.consecutive_losses += 1
             self.consecutive_wins = 0
+            self.last_loss_time = time.time()  # Record loss time for cooling off period
             if profit_amount < self.worst_trade_loss:
                 self.worst_trade_loss = profit_amount
         
@@ -1279,6 +1319,7 @@ class SimpleRSIStrategy:
         else:
             self.consecutive_losses += 1
             self.consecutive_wins = 0
+            self.last_loss_time = time.time()  # Record loss time for cooling off period
             if profit_amount < self.worst_trade_loss:
                 self.worst_trade_loss = profit_amount
         
@@ -1741,6 +1782,12 @@ class SimpleRSIStrategy:
             if self.use_setup_score and setup_score < self.min_setup_score:
                 should_buy = False
                 bot_logger.warning(f"Setup score too low: {setup_score} < {self.min_setup_score} - trade blocked")
+            
+            # Apply don't trade engine filters
+            should_block, block_reason = self.should_block_trade(current_price)
+            if should_block:
+                should_buy = False
+                bot_logger.warning(f"Don't trade engine blocked trade: {block_reason}")
             
             # Use adaptive confidence threshold
             adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
