@@ -10,6 +10,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from ml_models import MLTradingEnsemble, PricePredictionLSTM, SignalConfirmationRF, PatternRecognitionNN
 from openai_market_analyzer import OpenAIMarketAnalyzer
+from coin_scanner import CoinScanner
 
 # Set up bot logger for centralized logging
 bot_logger = logging.getLogger('bot')
@@ -31,6 +32,17 @@ class SimpleRSIStrategy:
         self.exchange = exchange
         self.config = config
         self.symbol = config.get('symbol', 'BTC/USDC')
+        
+        # Coin scanner integration
+        self.enable_coin_scanner = config.get('enable_coin_scanner', False)
+        self.coin_scanner = None
+        self.scan_interval = config.get('scan_interval_minutes', 5)
+        self.min_edge_score = config.get('min_edge_score', 2.0)
+        self.last_scan_time = 0
+        
+        if self.enable_coin_scanner and self.symbol == 'AUTO':
+            self.coin_scanner = CoinScanner()
+            bot_logger.info("Coin scanner enabled - will automatically select best trading pair")
         
         # Strategy parameters from config
         self.rsi_period = config.get('rsi_period', 7)
@@ -809,9 +821,44 @@ class SimpleRSIStrategy:
         # Save state
         self.save_capital_state()
     
+    def scan_for_best_pair(self):
+        """Scan for the best trading pair using coin scanner"""
+        if not self.coin_scanner:
+            return None
+            
+        current_time = time.time()
+        if current_time - self.last_scan_time < self.scan_interval * 60:
+            return None  # Not time to scan yet
+            
+        try:
+            best_pair = self.coin_scanner.get_best_pair()
+            self.last_scan_time = current_time
+            
+            if best_pair and best_pair['edge'] >= self.min_edge_score:
+                # Convert to exchange format
+                new_symbol = best_pair['symbol'].replace('-', '/')
+                
+                if new_symbol != self.symbol:
+                    bot_logger.info(f"Switching from {self.symbol} to {new_symbol} (edge: {best_pair['edge']:.2f})")
+                    self.symbol = new_symbol
+                    self.currency_symbol = best_pair['symbol'].split('-')[0]
+                    
+                    # Reset price history for new pair
+                    self.price_history = []
+                    
+                return best_pair
+        except Exception as e:
+            bot_logger.error(f"Error scanning for best pair: {e}")
+            
+        return None
+    
     def handle_trade_event(self, current_price):
         """Main trading logic"""
         bot_logger.info(f"=== handle_trade_event called === Price: ${current_price:.2f}, Position: {self.current_position}")
+        
+        # Scan for best pair if enabled
+        if self.enable_coin_scanner and self.symbol == 'AUTO':
+            self.scan_for_best_pair()
         
         # Add price to history
         self.price_history.append(current_price)
