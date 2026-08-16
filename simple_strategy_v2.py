@@ -96,6 +96,10 @@ class SimpleRSIStrategy:
         self.use_btc_weather = config.get('use_btc_weather', True)
         self.btc_weather_weight = config.get('btc_weather_weight', 0.3)
         
+        # Relative strength parameters
+        self.use_relative_strength = config.get('use_relative_strength', True)
+        self.relative_strength_weight = config.get('relative_strength_weight', 0.2)
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -224,6 +228,67 @@ class SimpleRSIStrategy:
                 json.dump(state, f)
         except Exception as e:
             bot_logger.warning(f"Could not save capital state: {e}")
+    
+    def get_relative_strength(self, current_price):
+        """Calculate relative strength of current pair vs BTC"""
+        if not self.use_relative_strength:
+            return {'strength': 0, 'signal': 'NEUTRAL'}
+        
+        try:
+            import yfinance as yf
+            
+            # Get current pair data
+            current_symbol = self.symbol.replace('/', '-')
+            if '-USDC' in current_symbol:
+                current_symbol = current_symbol.replace('-USDC', '-USD')
+            
+            current_ticker = yf.Ticker(current_symbol)
+            current_data = current_ticker.history(period='2d', interval='1h')
+            
+            # Get BTC data
+            btc_ticker = yf.Ticker('BTC-USD')
+            btc_data = btc_ticker.history(period='2d', interval='1h')
+            
+            if current_data.empty or btc_data.empty or len(current_data) < 5 or len(btc_data) < 5:
+                return {'strength': 0, 'signal': 'NEUTRAL'}
+            
+            # Calculate returns for current pair
+            current_prices = current_data['Close'].tolist()
+            current_return_5h = ((current_prices[-1] - current_prices[-5]) / current_prices[-5]) * 100 if len(current_prices) >= 5 else 0
+            
+            # Calculate returns for BTC
+            btc_prices = btc_data['Close'].tolist()
+            btc_return_5h = ((btc_prices[-1] - btc_prices[-5]) / btc_prices[-5]) * 100 if len(btc_prices) >= 5 else 0
+            
+            # Calculate relative strength
+            relative_strength = current_return_5h - btc_return_5h
+            
+            # Determine signal
+            if relative_strength > 1.0:
+                rs_signal = 'STRONG_OUTPERFORMING'
+            elif relative_strength > 0.5:
+                rs_signal = 'OUTPERFORMING'
+            elif relative_strength < -1.0:
+                rs_signal = 'STRONG_UNDERPERFORMING'
+            elif relative_strength < -0.5:
+                rs_signal = 'UNDERPERFORMING'
+            else:
+                rs_signal = 'NEUTRAL'
+            
+            rs_data = {
+                'strength': relative_strength,
+                'signal': rs_signal,
+                'current_return': current_return_5h,
+                'btc_return': btc_return_5h
+            }
+            
+            bot_logger.info(f"Relative Strength: {rs_signal} ({relative_strength:+.2f}% vs BTC)")
+            
+            return rs_data
+            
+        except Exception as e:
+            bot_logger.warning(f"Failed to calculate relative strength: {e}")
+            return {'strength': 0, 'signal': 'NEUTRAL'}
     
     def get_btc_market_weather(self):
         """Get BTC market conditions as a weather indicator for overall crypto market"""
@@ -1118,6 +1183,9 @@ class SimpleRSIStrategy:
         # Get BTC market weather for overall market context
         btc_weather = self.get_btc_market_weather()
         
+        # Get relative strength vs BTC
+        relative_strength = self.get_relative_strength(current_price)
+        
         # Add price to history
         self.price_history.append(current_price)
         if len(self.price_history) > 100:
@@ -1479,6 +1547,25 @@ class SimpleRSIStrategy:
                     # Boost confidence if BTC is strongly bullish
                     bullish_pct *= (1 + self.btc_weather_weight)
                     bot_logger.info(f"BTC strongly bullish - boosted confidence to {bullish_pct:.1f}%")
+            
+            # Apply relative strength filter
+            if self.use_relative_strength and relative_strength:
+                if relative_strength['signal'] == 'STRONG_OUTPERFORMING':
+                    # Boost confidence if strongly outperforming BTC
+                    bullish_pct *= (1 + self.relative_strength_weight)
+                    bot_logger.info(f"Strongly outperforming BTC - boosted confidence to {bullish_pct:.1f}%")
+                elif relative_strength['signal'] == 'OUTPERFORMING':
+                    # Slightly boost confidence if outperforming BTC
+                    bullish_pct *= (1 + self.relative_strength_weight * 0.5)
+                    bot_logger.info(f"Outperforming BTC - boosted confidence to {bullish_pct:.1f}%")
+                elif relative_strength['signal'] == 'STRONG_UNDERPERFORMING':
+                    # Reduce confidence if strongly underperforming BTC
+                    bullish_pct *= (1 - self.relative_strength_weight)
+                    bot_logger.info(f"Strongly underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
+                elif relative_strength['signal'] == 'UNDERPERFORMING':
+                    # Slightly reduce confidence if underperforming BTC
+                    bullish_pct *= (1 - self.relative_strength_weight * 0.5)
+                    bot_logger.info(f"Underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
             
             # Use adaptive confidence threshold
             adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
