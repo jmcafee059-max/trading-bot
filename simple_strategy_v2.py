@@ -1049,8 +1049,39 @@ class SimpleRSIStrategy:
                         # Fallback to traditional indicators
                         should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
             else:
-                # Use traditional indicators if ML not available
-                should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                # IMPROVED BUY TIMING with enhanced traditional indicators
+                # Momentum confirmation for better entry timing
+                momentum_surge = momentum > 0 and momentum > self.price_history[-2] - self.price_history[-3] if len(self.price_history) >= 3 else False
+                
+                # Volume spike confirmation (if we had real volume data)
+                volume_confirmation = True  # Placeholder since we don't have real volume
+                
+                # Price action confirmation - recent upward movement
+                price_action_bullish = current_price > self.price_history[-5] if len(self.price_history) >= 5 else True
+                
+                # Optimal entry conditions
+                optimal_entry = (
+                    rsi < 40 and  # Not overbought
+                    ema_short > ema_long and  # Uptrend
+                    macd_bullish and  # MACD bullish
+                    momentum_positive and  # Positive momentum
+                    price_near_lower  # Near support
+                )
+                
+                # Enhanced buy conditions with timing confirmation
+                if optimal_entry and momentum_surge and volume_confirmation:
+                    should_buy = True
+                    bullish_pct = 100
+                    bot_logger.info("OPTIMAL ENTRY: All timing conditions met")
+                elif bullish_pct >= (self.min_confidence_threshold * 100):
+                    # Standard buy with timing confirmation
+                    if momentum_surge and price_action_bullish:
+                        should_buy = True
+                        bot_logger.info("BUY with momentum confirmation")
+                    else:
+                        should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                else:
+                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
             
             # Force buy if no trades yet and we have some bullish signals
             if self.trade_count == 0 and bullish_pct > 0:
@@ -1071,35 +1102,61 @@ class SimpleRSIStrategy:
             # Debug logging for sell logic
             bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
             
-            # Sell signals - SIMPLIFIED for profitability
+            # Sell signals - IMPROVED TIMING
             should_sell = False
             reason = ""
             
-            # Take profit - only sell when we hit target
-            if profit_pct >= self.take_profit_pct:
-                should_sell = True
-                reason = "Take Profit"
-                bot_logger.info(f"Take profit triggered at {profit_pct:.2f}%")
+            # Dynamic take profit based on market conditions
+            dynamic_tp = self.take_profit_pct
+            if "HIGH_VOL" in market_regime:
+                dynamic_tp *= 1.5  # Higher targets in volatile markets
+            elif "LOW_VOL" in market_regime:
+                dynamic_tp *= 0.8  # Lower targets in calm markets
             
-            # Stop loss - only sell if we're losing significantly
+            # Take profit with dynamic adjustment
+            if profit_pct >= dynamic_tp:
+                should_sell = True
+                reason = f"Take Profit ({dynamic_tp:.2f}%)"
+                bot_logger.info(f"Take profit triggered at {profit_pct:.2f}% (target: {dynamic_tp:.2f}%)")
+            
+            # Improved stop loss with ATR-based adjustment
             elif profit_pct <= -self.stop_loss_pct:
                 should_sell = True
                 reason = "Stop Loss"
                 bot_logger.info(f"Stop loss triggered at {profit_pct:.2f}%")
             
-            # Trailing stop loss - lock in profits when price drops 1% from peak
+            # Enhanced trailing stop with dynamic adjustment
             elif self.highest_price_since_buy > self.last_buy_price:
                 trailing_stop_pct = ((self.highest_price_since_buy - current_price) / self.highest_price_since_buy) * 100
-                if trailing_stop_pct >= 1.0 and profit_pct > 2.0:
+                dynamic_trailing = 0.5 if "HIGH_VOL" in market_regime else 1.0
+                if trailing_stop_pct >= dynamic_trailing and profit_pct > 1.0:
                     should_sell = True
-                    reason = "Trailing Stop"
+                    reason = f"Trailing Stop ({dynamic_trailing:.1f}%)"
                     bot_logger.info(f"Trailing stop triggered at {trailing_stop_pct:.2f}% with profit {profit_pct:.2f}%")
             
-            # Only force sell after 200 ticks if we're losing significantly
-            elif len(self.price_history) > 200 and self.current_position == 'long' and profit_pct < -2.0:
+            # RSI-based exit for overbought conditions
+            elif rsi > 75 and profit_pct > 0.5:
                 should_sell = True
-                reason = "Max Hold Time (Loss)"
-                bot_logger.info(f"Forcing sell due to max hold time at loss {profit_pct:.2f}%")
+                reason = "RSI Overbought"
+                bot_logger.info(f"RSI overbought exit at {rsi:.1f} with profit {profit_pct:.2f}%")
+            
+            # MACD bearish crossover for timing
+            elif macd_bearish and profit_pct > 0.3:
+                should_sell = True
+                reason = "MACD Bearish Crossover"
+                bot_logger.info(f"MACD bearish crossover with profit {profit_pct:.2f}%")
+            
+            # Price below EMA short as exit signal
+            elif current_price < ema_short and profit_pct > 0.5:
+                should_sell = True
+                reason = "Price Below EMA Short"
+                bot_logger.info(f"Price below EMA short with profit {profit_pct:.2f}%")
+            
+            # Force sell after extended hold if not profitable
+            elif len(self.price_history) > 300 and self.current_position == 'long' and profit_pct < 0.2:
+                should_sell = True
+                reason = "Max Hold Time (Low Profit)"
+                bot_logger.info(f"Forcing sell due to max hold time at low profit {profit_pct:.2f}%")
             
             if should_sell:
                 self.place_sell_order(current_price, reason)

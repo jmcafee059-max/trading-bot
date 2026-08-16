@@ -201,7 +201,7 @@ class SignalConfirmationRF:
         self.scaler = StandardScaler()
         
     def prepare_features(self, df):
-        """Prepare features for Random Forest with enhanced indicators"""
+        """Prepare features for Random Forest with enhanced timing indicators"""
         df = df.copy()
         
         # Basic technical indicators
@@ -227,6 +227,28 @@ class SignalConfirmationRF:
         
         # Price position relative to Bollinger Bands
         df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        
+        # TIMING-SPECIFIC FEATURES
+        # Price momentum acceleration
+        df['momentum_accel'] = df['momentum'].diff()
+        
+        # RSI momentum
+        df['rsi_momentum'] = df['rsi'].diff()
+        
+        # MACD histogram momentum
+        df['macd_hist'] = df['macd'] - df['macd'].ewm(span=9).mean()
+        df['macd_hist_momentum'] = df['macd_hist'].diff()
+        
+        # Price vs EMAs relationship
+        df['price_above_ema_short'] = df['close'] > df['ema_short']
+        df['price_above_ema_long'] = df['close'] > df['ema_long']
+        
+        # EMA crossover signals
+        df['ema_crossover'] = (df['ema_short'] > df['ema_long']).astype(int)
+        df['ema_crossover_signal'] = df['ema_crossover'].diff()
+        
+        # Volatility breakout detection
+        df['volatility_breakout'] = df['volatility'] > df['volatility'].rolling(20).mean() * 1.5
         
         # Target: 1 if price goes up next period, 0 otherwise
         df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
