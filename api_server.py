@@ -43,6 +43,10 @@ bot_config = {
     'min_confidence_threshold': float(os.getenv('MIN_CONFIDENCE_THRESHOLD', '0.5')),
     'profit_multiplier': float(os.getenv('PROFIT_MULTIPLIER', '1.0')),
     'aggressive_mode': os.getenv('AGGRESSIVE_MODE', 'false').lower() == 'true',
+    'ml_enabled': os.getenv('ML_ENABLED', 'true').lower() == 'true',
+    'use_ml_signals': os.getenv('USE_ML_SIGNALS', 'true').lower() == 'true',
+    'ml_only': os.getenv('ML_ONLY', 'false').lower() == 'true',
+    'openai_enabled': os.getenv('OPENAI_ENABLED', 'false').lower() == 'true',
 }
 
 @app.route('/')

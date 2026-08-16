@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 from ml_models import MLTradingEnsemble, PricePredictionLSTM, SignalConfirmationRF, PatternRecognitionNN
+from openai_market_analyzer import OpenAIMarketAnalyzer
 
 # Set up bot logger for centralized logging
 bot_logger = logging.getLogger('bot')
@@ -63,6 +64,10 @@ class SimpleRSIStrategy:
         self.ml_enabled = config.get('ml_enabled', True)
         self.use_ml_signals = config.get('use_ml_signals', True)
         self.ml_only = config.get('ml_only', False)
+        
+        # OpenAI Integration
+        self.openai_analyzer = OpenAIMarketAnalyzer()
+        self.openai_enabled = config.get('openai_enabled', False)
         
         # Try to load pre-trained ML models
         if self.ml_enabled:
@@ -1006,8 +1011,68 @@ class SimpleRSIStrategy:
                                 elif rf_signal['confidence'] > 0.5:
                                     ml_sell_score += 2  # Moderate sell signal
                         
-                        # ML-Primary Decision
-                        if self.ml_only:
+                        # ML-Primary Decision with OpenAI Integration
+                        if self.openai_enabled:
+                            # Get OpenAI market analysis
+                            price_df = pd.DataFrame({'close': self.price_history})
+                            openai_signal = self.openai_analyzer.analyze_market_conditions(price_df, current_price)
+                            
+                            # Cross-reference OpenAI and ML signals
+                            combined_signal = self.openai_analyzer.cross_reference_signals(
+                                openai_signal, ml_buy_score, ml_sell_score
+                            )
+                            
+                            bot_logger.info(f"Combined Signal: {combined_signal['recommendation']} (confidence: {combined_signal['confidence']})")
+                            bot_logger.info(f"Reasoning: {combined_signal['reasoning']}")
+                            
+                            # Use combined signal for decision
+                            if 'STRONG BUY' in combined_signal['recommendation']:
+                                should_buy = True
+                                bullish_pct = 100
+                                bot_logger.info("COMBINED STRONG BUY signal")
+                            elif 'BUY' in combined_signal['recommendation']:
+                                should_buy = True
+                                bullish_pct = max(bullish_pct, 80)
+                                bot_logger.info("COMBINED BUY signal")
+                            elif 'STRONG SELL' in combined_signal['recommendation']:
+                                should_buy = False
+                                bullish_pct = 0
+                                bot_logger.info("COMBINED STRONG SELL signal")
+                            elif 'SELL' in combined_signal['recommendation']:
+                                should_buy = False
+                                bullish_pct = min(bullish_pct, 20)
+                                bot_logger.info("COMBINED SELL signal")
+                            else:
+                                # Fallback to ML-only logic
+                                if self.ml_only:
+                                    if ml_buy_score >= 3:
+                                        should_buy = True
+                                        bullish_pct = 100
+                                        bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
+                                    elif ml_sell_score >= 3:
+                                        should_buy = False
+                                        bullish_pct = 0
+                                        bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
+                                    else:
+                                        should_buy = False
+                                        bot_logger.info(f"ML-ONLY uncertain - no trade")
+                                else:
+                                    if ml_buy_score >= 5:
+                                        should_buy = True
+                                        bullish_pct = 100
+                                        bot_logger.info(f"ML STRONG BUY signal - score: {ml_buy_score}")
+                                    elif ml_buy_score >= 2:
+                                        should_buy = True
+                                        bullish_pct = max(bullish_pct, 70)
+                                        bot_logger.info(f"ML BUY signal - score: {ml_buy_score}")
+                                    elif ml_sell_score >= 3:
+                                        should_buy = False
+                                        bullish_pct = 0
+                                        bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
+                                    else:
+                                        should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                                        bot_logger.info(f"ML uncertain - using traditional indicators")
+                        elif self.ml_only:
                             # ML-Only Mode: Ignore traditional indicators completely
                             if ml_buy_score >= 3:
                                 should_buy = True
