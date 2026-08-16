@@ -92,6 +92,10 @@ class SimpleRSIStrategy:
         self.risk_per_trade_percent = config.get('risk_per_trade_percent', 0.5)
         self.max_position_risk_percent = config.get('max_position_risk_percent', 2.0)
         
+        # BTC market weather indicator parameters
+        self.use_btc_weather = config.get('use_btc_weather', True)
+        self.btc_weather_weight = config.get('btc_weather_weight', 0.3)
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -220,6 +224,67 @@ class SimpleRSIStrategy:
                 json.dump(state, f)
         except Exception as e:
             bot_logger.warning(f"Could not save capital state: {e}")
+    
+    def get_btc_market_weather(self):
+        """Get BTC market conditions as a weather indicator for overall crypto market"""
+        if not self.use_btc_weather:
+            return {'trend': 'NEUTRAL', 'momentum': 0, 'volatility': 0, 'signal': 'NEUTRAL'}
+        
+        try:
+            import yfinance as yf
+            btc_ticker = yf.Ticker('BTC-USD')
+            btc_data = btc_ticker.history(period='2d', interval='1h')
+            
+            if btc_data.empty:
+                return {'trend': 'NEUTRAL', 'momentum': 0, 'volatility': 0, 'signal': 'NEUTRAL'}
+            
+            btc_prices = btc_data['Close'].tolist()
+            
+            # Calculate BTC trend
+            if len(btc_prices) >= 24:
+                btc_change_24h = ((btc_prices[-1] - btc_prices[-24]) / btc_prices[-24]) * 100
+                btc_change_5h = ((btc_prices[-1] - btc_prices[-5]) / btc_prices[-5]) * 100 if len(btc_prices) >= 5 else 0
+                
+                # Determine BTC trend
+                if btc_change_24h > 2:
+                    btc_trend = 'BULLISH'
+                elif btc_change_24h < -2:
+                    btc_trend = 'BEARISH'
+                else:
+                    btc_trend = 'NEUTRAL'
+                
+                # Calculate BTC volatility
+                btc_volatility = (btc_data['Close'].tail(24).std() / btc_data['Close'].tail(24).mean()) * 100
+                
+                # Determine BTC signal
+                if btc_trend == 'BULLISH' and btc_change_5h > 0.5:
+                    btc_signal = 'STRONG_BULLISH'
+                elif btc_trend == 'BULLISH':
+                    btc_signal = 'BULLISH'
+                elif btc_trend == 'BEARISH' and btc_change_5h < -0.5:
+                    btc_signal = 'STRONG_BEARISH'
+                elif btc_trend == 'BEARISH':
+                    btc_signal = 'BEARISH'
+                else:
+                    btc_signal = 'NEUTRAL'
+                
+                weather = {
+                    'trend': btc_trend,
+                    'momentum': btc_change_5h,
+                    'volatility': btc_volatility,
+                    'signal': btc_signal,
+                    'change_24h': btc_change_24h
+                }
+                
+                bot_logger.info(f"BTC Weather: {btc_signal} (24h: {btc_change_24h:.2f}%, 5h: {btc_change_5h:.2f}%, Vol: {btc_volatility:.2f}%)")
+                
+                return weather
+            else:
+                return {'trend': 'NEUTRAL', 'momentum': 0, 'volatility': 0, 'signal': 'NEUTRAL'}
+                
+        except Exception as e:
+            bot_logger.warning(f"Failed to get BTC market weather: {e}")
+            return {'trend': 'NEUTRAL', 'momentum': 0, 'volatility': 0, 'signal': 'NEUTRAL'}
     
     def calculate_risk_based_position_size(self, current_price, stop_distance_pct):
         """Calculate position size based on risk per trade rather than fixed capital percentage"""
@@ -1050,6 +1115,9 @@ class SimpleRSIStrategy:
         if self.enable_coin_scanner and self.symbol == 'AUTO':
             self.scan_for_best_pair()
         
+        # Get BTC market weather for overall market context
+        btc_weather = self.get_btc_market_weather()
+        
         # Add price to history
         self.price_history.append(current_price)
         if len(self.price_history) > 100:
@@ -1396,6 +1464,21 @@ class SimpleRSIStrategy:
             # Force buy if no trades yet and we have some bullish signals
             if self.trade_count == 0 and bullish_pct > 0:
                 should_buy = True
+            
+            # Apply BTC market weather filter
+            if self.use_btc_weather and btc_weather:
+                if btc_weather['signal'] == 'STRONG_BEARISH':
+                    # Don't trade if BTC is strongly bearish
+                    should_buy = False
+                    bot_logger.warning("BTC strongly bearish - trade blocked")
+                elif btc_weather['signal'] == 'BEARISH':
+                    # Reduce position size or confidence if BTC is bearish
+                    bullish_pct *= (1 - self.btc_weather_weight)
+                    bot_logger.info(f"BTC bearish - reduced bullish confidence to {bullish_pct:.1f}%")
+                elif btc_weather['signal'] == 'STRONG_BULLISH':
+                    # Boost confidence if BTC is strongly bullish
+                    bullish_pct *= (1 + self.btc_weather_weight)
+                    bot_logger.info(f"BTC strongly bullish - boosted confidence to {bullish_pct:.1f}%")
             
             # Use adaptive confidence threshold
             adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
