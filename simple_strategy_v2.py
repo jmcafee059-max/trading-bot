@@ -1187,7 +1187,7 @@ class SimpleRSIStrategy:
                 dynamic_tp *= 0.8  # Lower targets in calm markets
             
             # Take profit with dynamic adjustment
-            if profit_pct >= dynamic_tp:
+            if profit_pct >= dynamic_tp - 0.001:  # Small tolerance for floating point precision
                 should_sell = True
                 reason = f"Take Profit ({dynamic_tp:.2f}%)"
                 bot_logger.info(f"Take profit triggered at {profit_pct:.2f}% (target: {dynamic_tp:.2f}%)")
