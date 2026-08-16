@@ -1166,6 +1166,58 @@ class SimpleRSIStrategy:
                 self.place_buy_order(current_price)
         
         elif self.current_position == 'long':
+            # Update AI signal during position for continuous monitoring
+            if self.ml_enabled and self.openai_enabled:
+                try:
+                    ml_data = pd.DataFrame({
+                        'close': self.price_history,
+                        'volume': [1] * len(self.price_history),
+                        'open': self.price_history,
+                        'high': self.price_history,
+                        'low': self.price_history
+                    })
+                    
+                    ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
+                    
+                    if ml_signals:
+                        ml_buy_score = 0
+                        ml_sell_score = 0
+                        
+                        if 'lstm' in ml_signals:
+                            lstm_pred = ml_signals['lstm']
+                            price_change_pct = ((lstm_pred - current_price) / current_price) * 100
+                            if price_change_pct > 0.5:
+                                ml_buy_score += 3
+                            elif price_change_pct > 0.2:
+                                ml_buy_score += 2
+                            elif price_change_pct < -0.5:
+                                ml_sell_score += 3
+                            elif price_change_pct < -0.2:
+                                ml_sell_score += 2
+                        
+                        if 'random_forest' in ml_signals:
+                            rf_signal = ml_signals['random_forest']
+                            if rf_signal == 'buy':
+                                ml_buy_score += 2
+                            elif rf_signal == 'sell':
+                                ml_sell_score += 2
+                        
+                        # Get OpenAI analysis during position
+                        price_df = pd.DataFrame({'close': self.price_history})
+                        openai_signal = self.openai_analyzer.analyze_market_conditions(price_df, current_price)
+                        
+                        # Cross-reference signals
+                        combined_signal = self.openai_analyzer.cross_reference_signals(
+                            openai_signal, ml_buy_score, ml_sell_score
+                        )
+                        
+                        # Update last AI signal for display
+                        self.last_ai_signal = combined_signal['recommendation']
+                        self.last_ai_confidence = combined_signal['confidence']
+                        
+                except Exception as e:
+                    bot_logger.warning(f"AI signal update during position failed: {e}")
+            
             # Update highest price for trailing stop
             if current_price > self.highest_price_since_buy:
                 self.highest_price_since_buy = current_price
