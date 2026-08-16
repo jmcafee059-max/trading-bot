@@ -305,7 +305,7 @@ if __name__ == "__main__":
     
     # Test data collection
     pipeline = TrainingPipeline(symbol='DOGE-USDC')
-    results = pipeline.run_training_pipeline(days=7)  # Collect 7 days for testing
+    results = pipeline.run_training_pipeline(days=30)  # Collect 30 days for better training
     
     if results:
         print("Training pipeline completed successfully!")

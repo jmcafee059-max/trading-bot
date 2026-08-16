@@ -67,11 +67,48 @@ def train_models():
     except Exception as e:
         train_logger.error(f"LSTM training failed: {e}")
     
-    # Train Random Forest model
+    # Train Random Forest model with hyperparameter tuning
     train_logger.info("Training Random Forest model for signal confirmation...")
     try:
+        from sklearn.model_selection import GridSearchCV
+        
         rf_model = SignalConfirmationRF(n_estimators=50, max_depth=8)
-        rf_model.train(df)
+        
+        # Hyperparameter grid
+        param_grid = {
+            'n_estimators': [50, 100, 200],
+            'max_depth': [8, 12, 16, None],
+            'min_samples_split': [2, 5, 10],
+            'min_samples_leaf': [1, 2, 4]
+        }
+        
+        # Prepare features
+        X, y, feature_names = rf_model.prepare_features(df)
+        
+        # Scale features
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Grid search with cross-validation
+        grid_search = GridSearchCV(
+            estimator=rf_model.model,
+            param_grid=param_grid,
+            cv=5,
+            scoring='accuracy',
+            n_jobs=-1,
+            verbose=1
+        )
+        
+        grid_search.fit(X_scaled, y)
+        
+        # Update model with best parameters
+        rf_model.model = grid_search.best_estimator_
+        rf_model.scaler = scaler
+        
+        train_logger.info(f"Best parameters: {grid_search.best_params_}")
+        train_logger.info(f"Best cross-validation accuracy: {grid_search.best_score_:.4f}")
+        
         rf_model.save()
         train_logger.info("Random Forest model trained and saved")
     except Exception as e:

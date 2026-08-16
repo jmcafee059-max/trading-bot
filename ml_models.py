@@ -201,10 +201,10 @@ class SignalConfirmationRF:
         self.scaler = StandardScaler()
         
     def prepare_features(self, df):
-        """Prepare features for Random Forest"""
+        """Prepare features for Random Forest with enhanced indicators"""
         df = df.copy()
         
-        # Technical indicators as features
+        # Basic technical indicators
         df['rsi'] = self.calculate_rsi(df['close'])
         df['macd'] = self.calculate_macd(df['close'])
         df['bb_upper'], df['bb_lower'] = self.calculate_bollinger_bands(df['close'])
@@ -213,6 +213,20 @@ class SignalConfirmationRF:
         df['volume_change'] = df['volume'].pct_change()
         df['price_change'] = df['close'].pct_change()
         df['volatility'] = df['close'].rolling(window=20).std()
+        
+        # Additional indicators
+        df['atr'] = self.calculate_atr(df)
+        df['williams_r'] = self.calculate_williams_r(df)
+        df['stochastic_k'], df['stochastic_d'] = self.calculate_stochastic(df)
+        df['momentum'] = df['close'].diff(14)
+        df['roc'] = df['close'].pct_change(14) * 100  # Rate of change
+        
+        # Market regime features
+        df['trend'] = df['close'] > df['ema_long']
+        df['volatility_regime'] = df['volatility'] > df['volatility'].rolling(50).mean()
+        
+        # Price position relative to Bollinger Bands
+        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
         
         # Target: 1 if price goes up next period, 0 otherwise
         df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
@@ -252,6 +266,46 @@ class SignalConfirmationRF:
         upper = sma + (std * std_dev)
         lower = sma - (std * std_dev)
         return upper, lower
+    
+    def calculate_atr(self, df, period=14):
+        """Calculate Average True Range"""
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        return atr
+    
+    def calculate_williams_r(self, df, period=14):
+        """Calculate Williams %R"""
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        highest_high = high.rolling(window=period).max()
+        lowest_low = low.rolling(window=period).min()
+        
+        williams_r = -100 * (highest_high - close) / (highest_high - lowest_low)
+        return williams_r
+    
+    def calculate_stochastic(self, df, k_period=14, d_period=3):
+        """Calculate Stochastic Oscillator"""
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        lowest_low = low.rolling(window=k_period).min()
+        highest_high = high.rolling(window=k_period).max()
+        
+        k_percent = 100 * (close - lowest_low) / (highest_high - lowest_low)
+        d_percent = k_percent.rolling(window=d_period).mean()
+        
+        return k_percent, d_percent
     
     def train(self, df):
         """Train Random Forest model"""
