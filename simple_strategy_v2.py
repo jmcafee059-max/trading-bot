@@ -64,6 +64,22 @@ class SimpleRSIStrategy:
         self.profit_multiplier = config.get('profit_multiplier', 1.0)  # Conservative multiplier
         self.aggressive_mode = config.get('aggressive_mode', True)  # Enable aggressive trading
         
+        # ATR-based trading parameters
+        self.use_atr_tp_sl = config.get('use_atr_tp_sl', True)
+        self.atr_tp_multiplier_low = config.get('atr_tp_multiplier_low', 0.8)
+        self.atr_tp_multiplier_normal = config.get('atr_tp_multiplier_normal', 1.5)
+        self.atr_tp_multiplier_high = config.get('atr_tp_multiplier_high', 2.5)
+        self.atr_sl_multiplier = config.get('atr_sl_multiplier', 1.2)
+        self.atr_period = config.get('atr_period', 14)
+        
+        # Trading cost model parameters
+        self.use_trading_cost_model = config.get('use_trading_cost_model', True)
+        self.maker_fee_percent = config.get('maker_fee_percent', 0.4)
+        self.taker_fee_percent = config.get('taker_fee_percent', 0.6)
+        self.estimated_spread_percent = config.get('estimated_spread_percent', 0.02)
+        self.estimated_slippage_percent = config.get('estimated_slippage_percent', 0.05)
+        self.min_expected_net_profit = config.get('min_expected_net_profit', 0.2)
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -332,6 +348,103 @@ class SimpleRSIStrategy:
         except Exception as e:
             bot_logger.warning(f"Momentum calculation failed: {e}")
             return 0
+    
+    def calculate_atr(self, prices, period=14):
+        """Calculate Average True Range for volatility-based trading"""
+        try:
+            if len(prices) < period + 1:
+                return 0.0
+                
+            df = pd.DataFrame({'price': prices})
+            
+            # Calculate True Range
+            high = df['price']
+            low = df['price']
+            close = df['price'].shift(1)
+            
+            tr1 = high - low
+            tr2 = abs(high - close)
+            tr3 = abs(low - close)
+            
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = tr.rolling(window=period).mean().iloc[-1]
+            
+            return atr if not pd.isna(atr) else 0.0
+        except Exception as e:
+            bot_logger.warning(f"ATR calculation failed: {e}")
+            return 0.0
+    
+    def calculate_trading_costs(self, trade_amount, is_maker=True):
+        """Calculate total trading costs including fees, spread, and slippage"""
+        if not self.use_trading_cost_model:
+            return 0.0
+            
+        fee_percent = self.maker_fee_percent if is_maker else self.taker_fee_percent
+        fee_amount = trade_amount * (fee_percent / 100)
+        spread_amount = trade_amount * (self.estimated_spread_percent / 100)
+        slippage_amount = trade_amount * (self.estimated_slippage_percent / 100)
+        
+        total_cost = fee_amount + spread_amount + slippage_amount
+        cost_percent = (total_cost / trade_amount) * 100 if trade_amount > 0 else 0
+        
+        bot_logger.info(f"Trading costs: Fee={fee_amount:.2f} ({fee_percent}%), Spread={spread_amount:.2f}, Slippage={slippage_amount:.2f}, Total={total_cost:.2f} ({cost_percent:.2f}%)")
+        
+        return total_cost
+    
+    def calculate_expected_net_profit(self, entry_price, target_price, trade_amount, is_maker=True):
+        """Calculate expected net profit after all trading costs"""
+        gross_profit = (target_price - entry_price) / entry_price * trade_amount
+        entry_cost = self.calculate_trading_costs(trade_amount, is_maker)
+        exit_cost = self.calculate_trading_costs(trade_amount, False)  # Assume taker for exit
+        
+        net_profit = gross_profit - entry_cost - exit_cost
+        net_profit_percent = (net_profit / trade_amount) * 100 if trade_amount > 0 else 0
+        
+        bot_logger.info(f"Expected net profit: Gross=${gross_profit:.2f}, Entry Cost=${entry_cost:.2f}, Exit Cost=${exit_cost:.2f}, Net=${net_profit:.2f} ({net_profit_percent:.2f}%)")
+        
+        return net_profit, net_profit_percent
+    
+    def is_trade_profitable(self, entry_price, target_price, trade_amount):
+        """Check if trade is profitable after accounting for costs"""
+        if not self.use_trading_cost_model:
+            return True
+            
+        _, net_profit_percent = self.calculate_expected_net_profit(entry_price, target_price, trade_amount)
+        
+        is_profitable = net_profit_percent >= self.min_expected_net_profit
+        
+        if not is_profitable:
+            bot_logger.warning(f"Trade not profitable after costs: Net profit {net_profit_percent:.2f}% < Minimum {self.min_expected_net_profit}%")
+        
+        return is_profitable
+    
+    def calculate_atr_tp_sl(self, current_price, volatility_regime):
+        """Calculate ATR-based take profit and stop loss based on market volatility"""
+        if not self.use_atr_tp_sl or len(self.price_history) < self.atr_period:
+            # Fall back to fixed percentages
+            return self.take_profit_pct, self.stop_loss_pct
+            
+        atr = self.calculate_atr(self.price_history, self.atr_period)
+        if atr == 0:
+            return self.take_profit_pct, self.stop_loss_pct
+        
+        # Determine volatility regime
+        atr_pct = (atr / current_price) * 100
+        
+        if 'LOW_VOL' in volatility_regime:
+            tp_multiplier = self.atr_tp_multiplier_low
+        elif 'HIGH_VOL' in volatility_regime:
+            tp_multiplier = self.atr_tp_multiplier_high
+        else:
+            tp_multiplier = self.atr_tp_multiplier_normal
+        
+        # Calculate TP and SL as percentages
+        atr_tp_pct = (atr * tp_multiplier / current_price) * 100
+        atr_sl_pct = (atr * self.atr_sl_multiplier / current_price) * 100
+        
+        bot_logger.info(f"ATR-based TP/SL: TP={atr_tp_pct:.2f}%, SL={atr_sl_pct:.2f}% (ATR={atr:.4f}, regime={volatility_regime})")
+        
+        return atr_tp_pct, atr_sl_pct
     
     def calculate_kelly_position_size(self, win_rate, avg_win, avg_loss):
         """Calculate optimal position size using Kelly Criterion"""
@@ -1210,6 +1323,23 @@ class SimpleRSIStrategy:
             bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | Threshold={self.min_confidence_threshold*100:.1f}% | ShouldBuy={should_buy}")
             
             if should_buy:
+                # Calculate trade amount for profitability check
+                base_trade_amount = self.current_capital * (self.capital_percentage / 100)
+                
+                # Calculate target price based on ATR or fixed TP
+                if self.use_atr_tp_sl:
+                    dynamic_tp, _ = self.calculate_atr_tp_sl(current_price, market_regime)
+                else:
+                    dynamic_tp = self.take_profit_pct
+                    
+                target_price = current_price * (1 + dynamic_tp / 100)
+                
+                # Check if trade is profitable after costs
+                if not self.is_trade_profitable(current_price, target_price, base_trade_amount):
+                    bot_logger.warning("Trade rejected: Not profitable after trading costs")
+                    should_buy = False
+            
+            if should_buy:
                 self.place_buy_order(current_price)
         
         elif self.current_position == 'long':
@@ -1274,16 +1404,21 @@ class SimpleRSIStrategy:
             # Debug logging for sell logic
             bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
             
-            # Sell signals - IMPROVED TIMING
+            # Sell signals - IMPROVED TIMING with ATR-based TP/SL
             should_sell = False
             reason = ""
             
-            # Dynamic take profit based on market conditions
-            dynamic_tp = self.take_profit_pct
-            if "HIGH_VOL" in market_regime:
-                dynamic_tp *= 1.5  # Higher targets in volatile markets
-            elif "LOW_VOL" in market_regime:
-                dynamic_tp *= 0.8  # Lower targets in calm markets
+            # Use ATR-based TP/SL if enabled, otherwise use dynamic fixed percentages
+            if self.use_atr_tp_sl:
+                dynamic_tp, dynamic_sl = self.calculate_atr_tp_sl(current_price, market_regime)
+            else:
+                # Dynamic take profit based on market conditions (legacy method)
+                dynamic_tp = self.take_profit_pct
+                if "HIGH_VOL" in market_regime:
+                    dynamic_tp *= 1.5  # Higher targets in volatile markets
+                elif "LOW_VOL" in market_regime:
+                    dynamic_tp *= 0.8  # Lower targets in calm markets
+                dynamic_sl = self.stop_loss_pct
             
             # Take profit with dynamic adjustment
             if profit_pct >= dynamic_tp - 0.01:  # Larger tolerance for floating point precision
@@ -1292,7 +1427,7 @@ class SimpleRSIStrategy:
                 bot_logger.info(f"Take profit triggered at {profit_pct:.2f}% (target: {dynamic_tp:.2f}%)")
             
             # Improved stop loss with ATR-based adjustment
-            elif profit_pct <= -self.stop_loss_pct:
+            elif profit_pct <= -dynamic_sl:
                 should_sell = True
                 reason = "Stop Loss"
                 bot_logger.info(f"Stop loss triggered at {profit_pct:.2f}%")
