@@ -1132,11 +1132,13 @@ class SimpleRSIStrategy:
         
         # Execute real buy order on exchange
         try:
-            # Coinbase requires cost parameter for market buy orders
-            # Use create_market_buy_order with cost parameter
+            # Coinbase requires specific configuration for market orders
+            # Set createMarketBuyOrderRequiresPrice to False and pass cost in amount
+            self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
+            
             order = self.exchange.create_market_buy_order(
                 self.symbol,
-                trade_value  # pass cost directly
+                trade_value  # pass cost directly as amount
             )
             order_id = order.get('id', 'N/A')
             bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order_id}")
