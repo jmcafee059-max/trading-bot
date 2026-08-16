@@ -304,7 +304,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
     # Test data collection
-    pipeline = TrainingPipeline(symbol='SOL-USDC')
+    pipeline = TrainingPipeline(symbol='ETH-USDC')
     results = pipeline.run_training_pipeline(days=30)  # Collect 30 days for better training
     
     if results:
