@@ -68,6 +68,8 @@ class SimpleRSIStrategy:
         # OpenAI Integration
         self.openai_analyzer = OpenAIMarketAnalyzer()
         self.openai_enabled = config.get('openai_enabled', False)
+        self.last_ai_signal = None
+        self.last_ai_confidence = None
         bot_logger.info(f"OpenAI enabled: {self.openai_enabled}")
         bot_logger.info(f"OpenAI analyzer enabled: {self.openai_analyzer.enabled}")
         
@@ -1026,6 +1028,10 @@ class SimpleRSIStrategy:
                             
                             bot_logger.info(f"Combined Signal: {combined_signal['recommendation']} (confidence: {combined_signal['confidence']})")
                             bot_logger.info(f"Reasoning: {combined_signal['reasoning']}")
+                            
+                            # Track last AI signal for display
+                            self.last_ai_signal = combined_signal['recommendation']
+                            self.last_ai_confidence = combined_signal['confidence']
                             
                             # Use combined signal for decision
                             if 'STRONG BUY' in combined_signal['recommendation']:

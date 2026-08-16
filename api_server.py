@@ -255,6 +255,11 @@ def bot_status():
         'worst_trade': strategy_instance.worst_trade_loss,
         'volatility_multiplier': strategy_instance.VOLATILITY_MULTIPLIER,
         'current_position_profit_pct': current_position_profit_pct,
+        'ml_enabled': strategy_instance.ml_enabled,
+        'ml_only': strategy_instance.ml_only,
+        'openai_enabled': strategy_instance.openai_enabled,
+        'last_ai_signal': getattr(strategy_instance, 'last_ai_signal', None),
+        'last_ai_confidence': getattr(strategy_instance, 'last_ai_confidence', None),
     })
 
 @app.route('/api/bot/trades', methods=['GET'])

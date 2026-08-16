@@ -176,6 +176,30 @@
             </div>
         </div>
 
+        <!-- AI Status -->
+        <div class="card p-6 mb-8">
+            <h2 class="text-2xl font-bold mb-6">
+                <i class="fas fa-robot text-gray-400 mr-2"></i>AI Status
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <div class="label mb-2">ML Models</div>
+                    <div id="mlStatus" class="text-xl font-bold text-blue-400">Checking...</div>
+                    <div id="mlDetails" class="text-sm text-gray-400 mt-1">Loading...</div>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <div class="label mb-2">OpenAI Analysis</div>
+                    <div id="openaiStatus" class="text-xl font-bold text-purple-400">Checking...</div>
+                    <div id="openaiDetails" class="text-sm text-gray-400 mt-1">Loading...</div>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <div class="label mb-2">Last AI Signal</div>
+                    <div id="lastSignal" class="text-xl font-bold text-green-400">None</div>
+                    <div id="signalDetails" class="text-sm text-gray-400 mt-1">Waiting for trade...</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Configuration & Trades -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- Configuration -->
@@ -502,6 +526,33 @@
                 document.getElementById('bestTrade').textContent = `$${data.best_trade.toFixed(2)}`;
                 document.getElementById('worstTrade').textContent = `$${data.worst_trade.toFixed(2)}`;
                 document.getElementById('volatility').textContent = `${data.volatility_multiplier.toFixed(2)}x`;
+                
+                // Update AI status
+                if (data.ml_enabled) {
+                    document.getElementById('mlStatus').textContent = 'Active';
+                    document.getElementById('mlStatus').className = 'text-xl font-bold text-green-400';
+                    document.getElementById('mlDetails').textContent = `Mode: ${data.ml_only ? 'ML-Only' : 'ML-Enhanced'}`;
+                } else {
+                    document.getElementById('mlStatus').textContent = 'Disabled';
+                    document.getElementById('mlStatus').className = 'text-xl font-bold text-gray-400';
+                    document.getElementById('mlDetails').textContent = 'Using traditional indicators';
+                }
+                
+                if (data.openai_enabled) {
+                    document.getElementById('openaiStatus').textContent = 'Active';
+                    document.getElementById('openaiStatus').className = 'text-xl font-bold text-green-400';
+                    document.getElementById('openaiDetails').textContent = 'GPT-4 market analysis';
+                } else {
+                    document.getElementById('openaiStatus').textContent = 'Disabled';
+                    document.getElementById('openaiStatus').className = 'text-xl font-bold text-gray-400';
+                    document.getElementById('openaiDetails').textContent = 'OpenAI not configured';
+                }
+                
+                if (data.last_ai_signal) {
+                    document.getElementById('lastSignal').textContent = data.last_ai_signal;
+                    document.getElementById('lastSignal').className = `text-xl font-bold ${data.last_ai_signal.includes('BUY') ? 'text-green-400' : data.last_ai_signal.includes('SELL') ? 'text-red-400' : 'text-yellow-400'}`;
+                    document.getElementById('signalDetails').textContent = data.last_ai_confidence ? `Confidence: ${data.last_ai_confidence}/10` : 'No recent signal';
+                }
                 
                 // Show/hide manual sell button based on position
                 const manualSellBtn = document.getElementById('manualSellBtn');
