@@ -89,21 +89,23 @@ class OpenAIMarketAnalyzer:
     def _create_analysis_prompt(self, market_summary: str) -> str:
         """Create analysis prompt for OpenAI"""
         prompt = f"""
-        You are an aggressive cryptocurrency trader focused on finding WINNING trades. Analyze the market data and identify profitable opportunities.
+        You are an EXTREMELY AGGRESSIVE cryptocurrency trader focused on finding WINNING trades. Analyze the market data and identify profitable opportunities.
         
         {market_summary}
         
-        Your goal: Find winning trades. Be aggressive in identifying buy opportunities when there's any positive momentum.
+        Your goal: Find winning trades. Be EXTREMELY aggressive in identifying STRONG BUY opportunities when there's any positive momentum.
+        
+        IMPORTANT: Use STRONG BUY recommendation liberally when there's any positive trend or momentum. Default to STRONG BUY over BUY when in doubt.
         
         Based on this data, provide:
         1. Market sentiment (BULLISH/BEARISH/NEUTRAL)
-        2. Trading recommendation (BUY/SELL/HOLD) - Prefer BUY over HOLD when there's any positive signal
-        3. Confidence level (1-10) - Higher confidence for strong buy signals
+        2. Trading recommendation (STRONG BUY/BUY/SELL/HOLD) - Prefer STRONG BUY over BUY when there's any positive signal
+        3. Confidence level (1-10) - Higher confidence (8-10) for strong buy signals
         4. Brief reasoning - Focus on why this could be a winning trade
         
         Format your response as:
         SENTIMENT: [BULLISH/BEARISH/NEUTRAL]
-        RECOMMENDATION: [BUY/SELL/HOLD]
+        RECOMMENDATION: [STRONG BUY/BUY/SELL/HOLD]
         CONFIDENCE: [1-10]
         REASONING: [brief explanation focusing on profit potential]
         """
@@ -176,19 +178,19 @@ class OpenAIMarketAnalyzer:
             combined_score -= ml_sell_score * 2
             reasoning.append(f"ML SELL (score: {ml_sell_score})")
         
-        # Determine final recommendation - more aggressive thresholds
-        if combined_score >= 5:  # Lowered from 8 for more frequent trades
+        # Determine final recommendation - extremely aggressive thresholds for strong buys
+        if combined_score >= 2:  # Lowered from 3 for even more STRONG BUY signals
             final_recommendation = 'STRONG BUY'
-            confidence = min(10, combined_score // 2)
-        elif combined_score >= 2:  # Lowered from 4 for more frequent trades
+            confidence = min(10, combined_score + 3)  # Boost confidence more
+        elif combined_score >= 0:  # Lowered from 1 for more BUY signals
             final_recommendation = 'BUY'
-            confidence = min(8, combined_score // 2)
-        elif combined_score <= -5:  # Lowered from -8 for more frequent trades
+            confidence = min(8, combined_score + 4)
+        elif combined_score <= -2:  # Lowered from -3 for more STRONG SELL signals
             final_recommendation = 'STRONG SELL'
-            confidence = min(10, abs(combined_score) // 2)
-        elif combined_score <= -2:  # Lowered from -4 for more frequent trades
+            confidence = min(10, abs(combined_score) + 3)
+        elif combined_score <= 0:  # Lowered from -1 for more SELL signals
             final_recommendation = 'SELL'
-            confidence = min(8, abs(combined_score) // 2)
+            confidence = min(8, abs(combined_score) + 4)
         else:
             final_recommendation = 'HOLD'
             confidence = 3
