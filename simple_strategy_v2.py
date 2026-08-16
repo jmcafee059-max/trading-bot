@@ -80,6 +80,13 @@ class SimpleRSIStrategy:
         self.estimated_slippage_percent = config.get('estimated_slippage_percent', 0.05)
         self.min_expected_net_profit = config.get('min_expected_net_profit', 0.2)
         
+        # Adaptive confidence threshold parameters
+        self.use_adaptive_confidence = config.get('use_adaptive_confidence', True)
+        self.normal_confidence_threshold = config.get('normal_confidence_threshold', 0.65)
+        self.strong_trend_confidence_threshold = config.get('strong_trend_confidence_threshold', 0.60)
+        self.choppy_market_confidence_threshold = config.get('choppy_market_confidence_threshold', 0.75)
+        self.extreme_volatility_mode = config.get('extreme_volatility_mode', False)
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -403,6 +410,33 @@ class SimpleRSIStrategy:
         bot_logger.info(f"Expected net profit: Gross=${gross_profit:.2f}, Entry Cost=${entry_cost:.2f}, Exit Cost=${exit_cost:.2f}, Net=${net_profit:.2f} ({net_profit_percent:.2f}%)")
         
         return net_profit, net_profit_percent
+    
+    def get_adaptive_confidence_threshold(self, market_regime, trend_strength):
+        """Calculate adaptive confidence threshold based on market conditions"""
+        if not self.use_adaptive_confidence:
+            return self.min_confidence_threshold
+        
+        # Extreme volatility - no trading
+        if self.extreme_volatility_mode:
+            bot_logger.warning("Extreme volatility mode - no trading allowed")
+            return 1.0  # Impossible threshold
+        
+        # Strong trend - lower threshold (more trades)
+        if 'TRENDING' in market_regime and trend_strength > 0.7:
+            threshold = self.strong_trend_confidence_threshold
+            bot_logger.info(f"Strong trend detected - using lower threshold: {threshold}")
+        
+        # Choppy/ranging market - higher threshold (fewer trades)
+        elif 'RANGING' in market_regime or 'SIDEWAYS' in market_regime:
+            threshold = self.choppy_market_confidence_threshold
+            bot_logger.info(f"Choppy market detected - using higher threshold: {threshold}")
+        
+        # Normal conditions
+        else:
+            threshold = self.normal_confidence_threshold
+            bot_logger.info(f"Normal market conditions - using standard threshold: {threshold}")
+        
+        return threshold
     
     def is_trade_profitable(self, entry_price, target_price, trade_amount):
         """Check if trade is profitable after accounting for costs"""
@@ -1306,21 +1340,24 @@ class SimpleRSIStrategy:
                     should_buy = True
                     bullish_pct = 100
                     bot_logger.info("OPTIMAL ENTRY: All timing conditions met")
-                elif bullish_pct >= (self.min_confidence_threshold * 100):
+                elif bullish_pct >= (adaptive_threshold * 100):
                     # Standard buy with timing confirmation
                     if momentum_surge and price_action_bullish:
                         should_buy = True
                         bot_logger.info("BUY with momentum confirmation")
                     else:
-                        should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                        should_buy = bullish_pct >= (adaptive_threshold * 100)
                 else:
-                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                    should_buy = bullish_pct >= (adaptive_threshold * 100)
             
             # Force buy if no trades yet and we have some bullish signals
             if self.trade_count == 0 and bullish_pct > 0:
                 should_buy = True
             
-            bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | Threshold={self.min_confidence_threshold*100:.1f}% | ShouldBuy={should_buy}")
+            # Use adaptive confidence threshold
+            adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+            
+            bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
             
             if should_buy:
                 # Calculate trade amount for profitability check
