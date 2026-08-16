@@ -48,7 +48,7 @@ class SimpleRSIStrategy:
         
         # Ultra-aggressive profit parameters
         self.max_position_size = config.get('max_position_size', 0.5)  # Use 50% of capital max for safety
-        self.min_confidence_threshold = config.get('min_confidence_threshold', 0.3)  # Lower threshold for more trades
+        self.min_confidence_threshold = config.get('min_confidence_threshold', 0.15)  # Lowered from 0.3 for more frequent trades
         self.profit_multiplier = config.get('profit_multiplier', 1.0)  # Conservative multiplier
         self.aggressive_mode = config.get('aggressive_mode', True)  # Enable aggressive trading
         
@@ -1082,11 +1082,11 @@ class SimpleRSIStrategy:
                                         bot_logger.info(f"ML uncertain - using traditional indicators")
                         elif self.ml_only:
                             # ML-Only Mode: Ignore traditional indicators completely
-                            if ml_buy_score >= 3:
+                            if ml_buy_score >= 2:  # Lowered from 3 for more frequent trades
                                 should_buy = True
                                 bullish_pct = 100  # ML-only mode
                                 bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
-                            elif ml_sell_score >= 3:
+                            elif ml_sell_score >= 2:  # Lowered from 3 for more frequent trades
                                 should_buy = False
                                 bullish_pct = 0  # ML-only mode
                                 bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
