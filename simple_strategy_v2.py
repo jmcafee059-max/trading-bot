@@ -87,6 +87,11 @@ class SimpleRSIStrategy:
         self.choppy_market_confidence_threshold = config.get('choppy_market_confidence_threshold', 0.75)
         self.extreme_volatility_mode = config.get('extreme_volatility_mode', False)
         
+        # Risk-based position sizing parameters
+        self.use_risk_based_sizing = config.get('use_risk_based_sizing', True)
+        self.risk_per_trade_percent = config.get('risk_per_trade_percent', 0.5)
+        self.max_position_risk_percent = config.get('max_position_risk_percent', 2.0)
+        
         # Performance tracking for adaptive optimization
         self.recent_trades = []
         self.win_rate = 0.5
@@ -216,8 +221,46 @@ class SimpleRSIStrategy:
         except Exception as e:
             bot_logger.warning(f"Could not save capital state: {e}")
     
+    def calculate_risk_based_position_size(self, current_price, stop_distance_pct):
+        """Calculate position size based on risk per trade rather than fixed capital percentage"""
+        if not self.use_risk_based_sizing:
+            return None  # Fall back to traditional sizing
+        
+        # Calculate risk amount (0.5% of account by default)
+        risk_amount = self.current_capital * (self.risk_per_trade_percent / 100)
+        
+        # Calculate position size based on stop distance
+        if stop_distance_pct > 0:
+            position_size = risk_amount / (current_price * (stop_distance_pct / 100))
+        else:
+            # Default to fixed percentage if no stop distance
+            position_size = (self.current_capital * (self.capital_percentage / 100)) / current_price
+        
+        # Calculate actual position risk
+        position_value = position_size * current_price
+        position_risk_pct = (position_value / self.current_capital) * 100
+        
+        # Cap at maximum position risk
+        if position_risk_pct > self.max_position_risk_percent:
+            position_size = (self.current_capital * (self.max_position_risk_percent / 100)) / current_price
+            bot_logger.warning(f"Position size capped at {self.max_position_risk_percent}% due to risk limits")
+        
+        bot_logger.info(f"Risk-based sizing: Risk=${risk_amount:.2f} ({self.risk_per_trade_percent}%), Position=${position_value:.2f} ({position_risk_pct:.2f}%)")
+        
+        return position_size
+    
     def calculate_position_size(self, current_price):
         """Calculate position size with dynamic sizing based on confidence and volatility"""
+        # Try risk-based sizing first if enabled
+        if self.use_atr_tp_sl:
+            # Calculate stop distance for risk-based sizing
+            _, stop_distance_pct = self.calculate_atr_tp_sl(current_price, "NORMAL")
+            risk_based_size = self.calculate_risk_based_position_size(current_price, stop_distance_pct)
+            
+            if risk_based_size is not None:
+                return max(risk_based_size, 0.00001)
+        
+        # Fall back to traditional sizing
         # Calculate base trade amount
         base_trade_amount = self.current_capital * (self.capital_percentage / 100)
         
