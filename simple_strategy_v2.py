@@ -1127,6 +1127,13 @@ class SimpleRSIStrategy:
         position_size = self.calculate_position_size(current_price)
         trade_value = position_size * current_price
         
+        # Check minimum order size (Coinbase minimum is typically $1-2)
+        MIN_ORDER_SIZE = 2.0  # $2 minimum order size
+        if trade_value < MIN_ORDER_SIZE:
+            bot_logger.warning(f"Order size ${trade_value:.2f} below minimum ${MIN_ORDER_SIZE:.2f} - insufficient capital for real trading")
+            bot_logger.warning(f"Current capital: ${self.current_capital:.2f} - deposit more funds or use paper trading")
+            return 0
+        
         order_successful = False
         order_id = None
         
