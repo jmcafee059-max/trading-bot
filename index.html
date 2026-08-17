@@ -156,6 +156,7 @@
                 <div class="label mb-2">Current Position</div>
                 <div id="positionValue" class="stat-value text-purple-400">None</div>
                 <div id="positionDetails" class="text-lg text-gray-400 mt-2">Long: None | Short: None</div>
+                <div id="takeProfitIndicator" class="text-sm text-gray-400 mt-2">TP: 0.30% | SL: 0.20%</div>
             </div>
         </div>
 
@@ -551,6 +552,19 @@
                 if (data.short_position) positionText.push('SHORT');
                 document.getElementById('positionValue').textContent = positionText.length > 0 ? positionText.join(' + ') : 'None';
                 document.getElementById('positionDetails').textContent = `Long: ${data.long_position ? `$${data.long_entry_price?.toFixed(2) || 'N/A'}` : 'None'} | Short: ${data.short_position ? `$${data.short_entry_price?.toFixed(2) || 'N/A'}` : 'None'}`;
+                
+                // Update take profit indicator
+                let tpText = 'TP: 0.30% | SL: 0.20%';
+                if (data.long_position && data.long_entry_price) {
+                    const tpPrice = data.long_entry_price * 1.003;
+                    const slPrice = data.long_entry_price * 0.998;
+                    tpText = `Long TP: $${tpPrice.toFixed(2)} | SL: $${slPrice.toFixed(2)}`;
+                } else if (data.short_position && data.short_entry_price) {
+                    const tpPrice = data.short_entry_price * 0.997;
+                    const slPrice = data.short_entry_price * 1.002;
+                    tpText = `Short TP: $${tpPrice.toFixed(2)} | SL: $${slPrice.toFixed(2)}`;
+                }
+                document.getElementById('takeProfitIndicator').textContent = tpText;
                 
                 document.getElementById('winRate').textContent = `Win Rate: ${(data.win_rate * 100).toFixed(1)}%`;
                 document.getElementById('bestTrade').textContent = `$${data.best_trade.toFixed(2)}`;
