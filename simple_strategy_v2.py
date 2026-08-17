@@ -1796,7 +1796,8 @@ class SimpleRSIStrategy:
                                     bullish_pct = 0
                                     bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
                                 else:
-                                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                                    adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+                                    should_buy = bullish_pct >= (adaptive_threshold * 100)
                                     bot_logger.info(f"ML uncertain - using traditional indicators")
                     elif self.ml_only:
                         # ML-Only Mode: Ignore traditional indicators completely
@@ -1826,8 +1827,8 @@ class SimpleRSIStrategy:
                             bullish_pct = 0  # Override traditional indicators
                             bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
                         else:
-                            # Fallback to traditional indicators if ML is uncertain
-                            should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                            adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+                            should_buy = bullish_pct >= (adaptive_threshold * 100)
                             bot_logger.info(f"ML uncertain - using traditional indicators")
                     
                     bot_logger.info(f"Final bullish percentage: {bullish_pct:.1f}%")
@@ -1838,7 +1839,8 @@ class SimpleRSIStrategy:
                     should_buy = False  # ML-only mode: don't trade if ML fails
                 else:
                     # Fallback to traditional indicators
-                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                    adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+                    should_buy = bullish_pct >= (adaptive_threshold * 100)
         else:
             # IMPROVED BUY TIMING with enhanced traditional indicators
             # Momentum confirmation for better entry timing
@@ -1859,20 +1861,23 @@ class SimpleRSIStrategy:
                 price_near_lower  # Near support
             )
             
+            # Calculate adaptive threshold BEFORE using it for decision
+            adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+            
             # Enhanced buy conditions with timing confirmation
             if optimal_entry and momentum_surge and volume_confirmation:
                 should_buy = True
                 bullish_pct = 100
                 bot_logger.info("OPTIMAL ENTRY: All timing conditions met")
-            elif bullish_pct >= (self.min_confidence_threshold * 100):
+            elif bullish_pct >= (adaptive_threshold * 100):
                 # Standard buy with timing confirmation
                 if momentum_surge and price_action_bullish:
                     should_buy = True
                     bot_logger.info("BUY with momentum confirmation")
                 else:
-                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                    should_buy = bullish_pct >= (adaptive_threshold * 100)
             else:
-                should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                should_buy = bullish_pct >= (adaptive_threshold * 100)
         
         # Force buy if no trades yet and we have some bullish signals
         if self.trade_count == 0 and bullish_pct > 0:
@@ -1930,8 +1935,9 @@ class SimpleRSIStrategy:
             should_buy = False
             bot_logger.warning(f"Don't trade engine blocked trade: {block_reason}")
         
-        # Use adaptive confidence threshold
-        adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+        # Calculate adaptive threshold for logging (already used for decision above)
+        if 'adaptive_threshold' not in locals():
+            adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
         
         bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% | Setup Score={setup_score}/100 | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
         
