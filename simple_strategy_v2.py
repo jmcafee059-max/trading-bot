@@ -1754,14 +1754,22 @@ class SimpleRSIStrategy:
             bot_logger.error(f"Failed to place real short order: {e}")
             order_successful = False
         
-        # Set short position
-        self.short_position = True
-        self.last_short_price = current_price
-        self.short_position_size = position_size
-        self.lowest_price_since_short = current_price
-        self.partial_tps_taken = []
-        
-        bot_logger.info(f"[SHORT #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Real: {order_successful}")
+        # Only set short position if order was successful
+        if order_successful:
+            self.short_position = True
+            self.last_short_price = current_price
+            self.short_position_size = position_size
+            self.lowest_price_since_short = current_price
+            self.partial_tps_taken = []
+            
+            # Initialize trailing stop and breakeven for short position
+            self.short_trailing_stop_price = None
+            self.short_breakeven_triggered = False
+            
+            bot_logger.info(f"[SHORT #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Real: {order_successful}")
+        else:
+            bot_logger.warning(f"Short order failed - not setting position")
+            return 0
         
         return position_size
     
