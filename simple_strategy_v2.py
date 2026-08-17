@@ -1555,7 +1555,7 @@ class SimpleRSIStrategy:
                 self.min_confidence_threshold = 0.10
             
             # ML-Primary Trading Decision
-            if self.ml_enabled and self.use_ml_signals and len(self.price_history) >= 20:
+            if self.ml_enabled and self.use_ml_signals and len(self.price_history) >= 5:
                 try:
                     # Create DataFrame for ML prediction
                     ml_data = pd.DataFrame({
