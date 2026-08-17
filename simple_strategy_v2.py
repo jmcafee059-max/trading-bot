@@ -176,6 +176,7 @@ class SimpleRSIStrategy:
         else:
             self.currency_symbol = 'USD'  # fallback
         self.price_history = []
+        self.volume_history = []  # Track volume for ETH strategy
         self.current_position = None
         self.trade_count = 0
         self.profit_loss = 0.0
@@ -187,6 +188,14 @@ class SimpleRSIStrategy:
         self.trade_history = []
         self.best_trade_profit = 0.0
         self.worst_trade_loss = 0.0
+        
+        # ETH-specific strategy parameters
+        self.is_eth_strategy = (symbol in ['ETH/USDC', 'ETH-USDC'])
+        self.eth_resistance_levels = [1900, 1922, 1950]  # Key resistance levels for ETH
+        self.eth_support_levels = [1862, 1883, 1850]  # Key support levels for ETH
+        self.eth_rsi_preferred_zone = (45, 65)  # Preferred RSI zone for ETH longs
+        self.eth_rsi_overbought = 70  # Overbought threshold for ETH
+        self.eth_min_setup_score = 80  # Minimum score for ETH trades
         
         # State machine
         self.trading_state = TradingState.IDLE_SCANNING
@@ -1139,6 +1148,181 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"Support/Resistance detection failed: {e}")
             return None, None
     
+    def detect_eth_pullback(self, current_price, ema_short, ema_long, rsi):
+        """Detect ETH pullback pattern for entry"""
+        if not self.is_eth_strategy:
+            return False, "Not ETH strategy"
+        
+        try:
+            # Pullback conditions: price pulls back toward EMA20/EMA50
+            price_near_ema_short = abs(current_price - ema_short) / ema_short < 0.01  # Within 1% of EMA20
+            price_near_ema_long = abs(current_price - ema_long) / ema_long < 0.015  # Within 1.5% of EMA50
+            
+            # RSI in preferred zone (45-65)
+            rsi_in_zone = self.eth_rsi_preferred_zone[0] <= rsi <= self.eth_rsi_preferred_zone[1]
+            
+            # EMA trend confirmation
+            ema_trend_up = ema_short > ema_long
+            
+            # Price not excessively extended above EMA20
+            price_not_extended = current_price < ema_short * 1.02  # Less than 2% above EMA20
+            
+            if price_near_ema_short and rsi_in_zone and ema_trend_up and price_not_extended:
+                return True, "ETH pullback to EMA20 with RSI in preferred zone"
+            elif price_near_ema_long and rsi_in_zone and ema_trend_up:
+                return True, "ETH pullback to EMA50 with RSI in preferred zone"
+            
+            return False, "Pullback conditions not met"
+        except Exception as e:
+            bot_logger.warning(f"ETH pullback detection failed: {e}")
+            return False, "Detection error"
+    
+    def detect_eth_breakout_retest(self, current_price, prices):
+        """Detect ETH breakout and retest pattern"""
+        if not self.is_eth_strategy:
+            return False, "Not ETH strategy"
+        
+        try:
+            if len(prices) < 10:
+                return False, "Insufficient price history"
+            
+            recent_prices = prices[-10:]
+            
+            # Detect recent resistance breakout
+            resistance, _ = self.detect_support_resistance(prices)
+            if resistance is None:
+                return False, "No resistance detected"
+            
+            # Check if price recently broke above resistance
+            broke_out = any(p > resistance for p in recent_prices[-5:])
+            
+            # Check if price is retesting resistance (now support)
+            near_retest = abs(current_price - resistance) / resistance < 0.01  # Within 1%
+            
+            # Check if support is holding (price bouncing off)
+            if broke_out and near_retest and current_price >= resistance * 0.99:
+                return True, f"ETH breakout retest at ${resistance:.2f} holding as support"
+            
+            return False, "Breakout retest pattern not detected"
+        except Exception as e:
+            bot_logger.warning(f"ETH breakout retest detection failed: {e}")
+            return False, "Detection error"
+    
+    def check_eth_resistance_avoidance(self, current_price):
+        """Check if ETH is near resistance to avoid chasing"""
+        if not self.is_eth_strategy:
+            return False, "Not ETH strategy"
+        
+        try:
+            for level in self.eth_resistance_levels:
+                distance = abs(current_price - level) / level
+                if distance < 0.01:  # Within 1% of resistance
+                    return True, f"ETH within 1% of resistance at ${level:.2f} - avoid chasing"
+            
+            return False, "Not near resistance"
+        except Exception as e:
+            bot_logger.warning(f"ETH resistance avoidance check failed: {e}")
+            return False, "Check error"
+    
+    def check_volume_confirmation(self, current_volume=None):
+        """Check volume confirmation for ETH strategy"""
+        if not self.is_eth_strategy or current_volume is None:
+            return True, "Volume check not applicable"
+        
+        try:
+            if len(self.volume_history) < 20:
+                return True, "Insufficient volume history - using default"
+            
+            avg_volume = sum(self.volume_history[-20:]) / 20
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
+            
+            # Volume should be 1.2x average for breakout
+            if volume_ratio >= 1.2:
+                return True, f"Volume confirmed: {volume_ratio:.2f}x average"
+            else:
+                return False, f"Volume insufficient: {volume_ratio:.2f}x average (need 1.2x)"
+        except Exception as e:
+            bot_logger.warning(f"Volume confirmation check failed: {e}")
+            return True, "Volume check error - proceeding"
+    
+    def calculate_eth_setup_score(self, rsi, ema_short, ema_long, macd_bullish, 
+                                  price_near_lower, current_price, volume_confirmed,
+                                  pullback_detected, breakout_retest_detected, near_resistance):
+        """Calculate ETH-specific 100-point setup score"""
+        if not self.is_eth_strategy:
+            return 0
+        
+        score = 0
+        
+        # EMA trend (15 points)
+        if ema_short > ema_long:
+            score += 15
+            if ema_short > ema_long * 1.01:  # Strong trend
+                score += 3
+        
+        # MACD (15 points)
+        if macd_bullish:
+            score += 15
+        
+        # RSI (10 points)
+        if self.eth_rsi_preferred_zone[0] <= rsi <= self.eth_rsi_preferred_zone[1]:
+            score += 10  # Preferred zone
+        elif rsi < self.eth_rsi_preferred_zone[0]:
+            score += 5  # Oversold - acceptable
+        elif rsi < self.eth_rsi_overbought:
+            score += 3  # Elevated but not overbought
+        else:
+            score -= 10  # Overbought - penalty
+        
+        # Volume (15 points)
+        if volume_confirmed:
+            score += 15
+        else:
+            score += 5  # Volume not confirmed but not critical
+        
+        # Pullback/Pattern (15 points)
+        if pullback_detected:
+            score += 15
+        elif breakout_retest_detected:
+            score += 15
+        elif price_near_lower:
+            score += 10  # Near support
+        else:
+            score += 5  # No clear pattern
+        
+        # Price extension (10 points)
+        price_extension = (current_price - ema_short) / ema_short
+        if 0 <= price_extension <= 0.02:  # 0-2% above EMA20 - ideal
+            score += 10
+        elif -0.01 <= price_extension <= 0:  # At or slightly below EMA20 - good
+            score += 8
+        elif 0.02 < price_extension <= 0.05:  # 2-5% above - acceptable
+            score += 5
+        else:
+            score -= 5  # Too extended
+        
+        # Resistance avoidance (15 points)
+        if not near_resistance:
+            score += 15
+        else:
+            score -= 20  # Heavy penalty for being near resistance
+        
+        # Momentum (10 points)
+        if len(self.price_history) >= 3:
+            momentum = self.price_history[-1] - self.price_history[-3]
+            if momentum > 0:
+                score += 10
+            else:
+                score += 3
+        
+        # BTC confirmation (5 points) - placeholder
+        score += 5
+        
+        # ML probability (5 points) - placeholder
+        score += 5
+        
+        return min(score, 100)  # Cap at 100
+    
     def detect_breakout(self, current_price, support, resistance):
         """Detect price breakout from support/resistance"""
         try:
@@ -1457,6 +1641,22 @@ class SimpleRSIStrategy:
         self.price_history.append(current_price)
         if len(self.price_history) > 100:
             self.price_history.pop(0)
+        
+        # Add volume to history for ETH strategy
+        if self.is_eth_strategy:
+            # Fetch ticker with volume data
+            try:
+                ticker = self.exchange.fetch_ticker(self.symbol)
+                volume = ticker.get('baseVolume', 1)  # Default to 1 if volume not available
+                self.volume_history.append(volume)
+                if len(self.volume_history) > 100:
+                    self.volume_history.pop(0)
+            except Exception as e:
+                bot_logger.warning(f"Failed to fetch volume data: {e}")
+                # Add placeholder volume
+                self.volume_history.append(1)
+                if len(self.volume_history) > 100:
+                    self.volume_history.pop(0)
         
         bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {self.current_position or 'None'} | Trades: {self.trade_count} | State: {self.trading_state.value}")
         
@@ -1922,6 +2122,57 @@ class SimpleRSIStrategy:
         if self.trade_count == 0 and bullish_pct > 0:
             should_buy = True
             bot_logger.info("Force first trade - no previous trades")
+        
+        # ETH-SPECIFIC STRATEGY
+        if self.is_eth_strategy:
+            bot_logger.info("🔷 ETH-SPECIFIC STRATEGY ACTIVE")
+            
+            # Detect ETH patterns
+            pullback_detected, pullback_reason = self.detect_eth_pullback(current_price, ema_short, ema_long, rsi)
+            breakout_retest_detected, breakout_reason = self.detect_eth_breakout_retest(current_price, self.price_history)
+            near_resistance, resistance_reason = self.check_eth_resistance_avoidance(current_price)
+            
+            # Get current volume for confirmation
+            current_volume = self.volume_history[-1] if self.volume_history else None
+            volume_confirmed, volume_reason = self.check_volume_confirmation(current_volume)
+            
+            # Log ETH pattern detection
+            if pullback_detected:
+                bot_logger.info(f"✅ ETH PULLBACK DETECTED: {pullback_reason}")
+            if breakout_retest_detected:
+                bot_logger.info(f"✅ ETH BREAKOUT RETEST DETECTED: {breakout_reason}")
+            if near_resistance:
+                bot_logger.warning(f"⚠️ ETH RESISTANCE AVOIDANCE: {resistance_reason}")
+            bot_logger.info(f"📊 ETH Volume: {volume_reason}")
+            
+            # Apply ETH resistance avoidance (hard block)
+            if near_resistance:
+                should_buy = False
+                bot_logger.warning(f"❌ ETH TRADE BLOCKED: {resistance_reason}")
+            
+            # Calculate ETH-specific setup score
+            eth_setup_score = self.calculate_eth_setup_score(
+                rsi, ema_short, ema_long, macd_bullish, price_near_lower,
+                current_price, volume_confirmed, pullback_detected,
+                breakout_retest_detected, near_resistance
+            )
+            
+            bot_logger.info(f"🔷 ETH SETUP SCORE: {eth_setup_score}/100 (min: {self.eth_min_setup_score})")
+            
+            # Apply ETH-specific scoring
+            if eth_setup_score >= 90:
+                bot_logger.info("✅ ETH A+ SETUP (90-100) - Trade approved")
+                should_buy = True
+            elif eth_setup_score >= 85:
+                bot_logger.info("✅ ETH STRONG SETUP (85-89) - Trade approved")
+                should_buy = True
+            elif eth_setup_score >= 80:
+                bot_logger.info("⚠️ ETH BORDERLINE SETUP (80-84) - Small position only")
+                # Could reduce position size here
+                should_buy = should_buy  # Keep existing decision
+            else:
+                bot_logger.warning(f"❌ ETH SETUP TOO LOW ({eth_setup_score} < 80) - Trade rejected")
+                should_buy = False
         
         # Apply BTC market weather filter
         if self.use_btc_weather and btc_weather:
