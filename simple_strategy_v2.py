@@ -1230,11 +1230,12 @@ class SimpleRSIStrategy:
         if self.current_position != 'long' or self.last_buy_price is None:
             return
         
+        # Extract base currency from symbol (e.g., SAND from SAND-USDC)
+        base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+        
         # Check actual base currency balance before attempting to sell
         try:
             balance = self.exchange.fetch_balance()
-            # Extract base currency from symbol (e.g., SAND from SAND-USDC)
-            base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
             base_balance = balance.get(base_currency, {}).get('free', 0)
             bot_logger.info(f"Actual {base_currency} balance: {base_balance:.6f}, Attempting to sell: {self.position_size:.6f}")
             
