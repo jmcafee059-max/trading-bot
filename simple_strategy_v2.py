@@ -1400,16 +1400,19 @@ class SimpleRSIStrategy:
             
             # Check liquidity (24h volume)
             volume_24h = ticker.get('quoteVolume', 0)
+            if volume_24h is None or volume_24h == 0:
+                return False, "Volume data unavailable"
             if volume_24h < self.sol_min_liquidity:
                 return False, f"Insufficient liquidity: ${volume_24h:,.0f} < ${self.sol_min_liquidity:,.0f}"
             
             # Check spread
             bid = ticker.get('bid', 0)
             ask = ticker.get('ask', 0)
-            if bid > 0 and ask > 0:
-                spread_pct = ((ask - bid) / bid) * 100
-                if spread_pct > self.sol_max_spread_pct:
-                    return False, f"Spread too wide: {spread_pct:.3f}% > {self.sol_max_spread_pct:.3f}%"
+            if bid is None or ask is None or bid == 0 or ask == 0:
+                return False, "Bid/ask data unavailable"
+            spread_pct = ((ask - bid) / bid) * 100
+            if spread_pct > self.sol_max_spread_pct:
+                return False, f"Spread too wide: {spread_pct:.3f}% > {self.sol_max_spread_pct:.3f}%"
             
             return True, f"Liquidity OK: ${volume_24h:,.0f}, Spread OK"
         except Exception as e:
