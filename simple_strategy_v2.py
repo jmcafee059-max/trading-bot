@@ -195,9 +195,9 @@ class SimpleRSIStrategy:
         bot_logger.info(f"ETH Strategy Detection: Symbol='{symbol}', Normalized='{symbol_normalized}', Is_ETH={self.is_eth_strategy}")
         self.eth_resistance_levels = [1900, 1922, 1950]  # Key resistance levels for ETH
         self.eth_support_levels = [1862, 1883, 1850]  # Key support levels for ETH
-        self.eth_rsi_preferred_zone = (45, 65)  # Preferred RSI zone for ETH longs
+        self.eth_rsi_preferred_zone = (30, 70)  # Preferred RSI zone for ETH longs (widened from 45-65)
         self.eth_rsi_overbought = 70  # Overbought threshold for ETH
-        self.eth_min_setup_score = 80  # Minimum score for ETH trades
+        self.eth_min_setup_score = 70  # Minimum score for ETH trades (lowered from 80)
         
         # State machine
         self.trading_state = TradingState.IDLE_SCANNING
@@ -1218,8 +1218,8 @@ class SimpleRSIStrategy:
         try:
             for level in self.eth_resistance_levels:
                 distance = abs(current_price - level) / level
-                if distance < 0.01:  # Within 1% of resistance
-                    return True, f"ETH within 1% of resistance at ${level:.2f} - avoid chasing"
+                if distance < 0.005:  # Within 0.5% of resistance (relaxed from 1%)
+                    return True, f"ETH within 0.5% of resistance at ${level:.2f} - avoid chasing"
             
             return False, "Not near resistance"
         except Exception as e:
