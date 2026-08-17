@@ -91,6 +91,14 @@ class SimpleRSIStrategy:
         self.estimated_slippage_percent = config.get('estimated_slippage_percent', 0.05)
         self.min_expected_net_profit = config.get('min_expected_net_profit', 0.2)
         
+        # Trailing stop and breakeven parameters
+        self.use_trailing_stop = config.get('use_trailing_stop', True)
+        self.trailing_stop_activation_pct = config.get('trailing_stop_activation_pct', 0.15)  # Activate trailing stop after 0.15% profit
+        self.trailing_stop_distance_pct = config.get('trailing_stop_distance_pct', 0.10)  # Trail 0.10% behind highest price
+        self.use_breakeven = config.get('use_breakeven', True)
+        self.breakeven_activation_pct = config.get('breakeven_activation_pct', 0.20)  # Move to breakeven after 0.20% profit
+        self.breakeven_offset_pct = config.get('breakeven_offset_pct', 0.02)  # Small buffer above entry
+        
         # Adaptive confidence threshold parameters
         self.use_adaptive_confidence = config.get('use_adaptive_confidence', True)
         self.normal_confidence_threshold = config.get('normal_confidence_threshold', 0.65)
@@ -193,6 +201,12 @@ class SimpleRSIStrategy:
         self.trade_history = []
         self.best_trade_profit = 0.0
         self.worst_trade_loss = 0.0
+        
+        # Trailing stop and breakeven tracking
+        self.trailing_stop_price = None  # Current trailing stop level for long
+        self.breakeven_triggered = False  # Whether breakeven has been triggered
+        self.short_trailing_stop_price = None  # Current trailing stop level for short
+        self.short_breakeven_triggered = False
         
         # Short trading configuration
         self.enable_short_trading = config.get('enable_short_trading', False)
@@ -1834,6 +1848,10 @@ class SimpleRSIStrategy:
         self.long_position_size = 0.0
         self.highest_price_since_buy = None
         
+        # Reset trailing stop and breakeven for long position
+        self.trailing_stop_price = None
+        self.breakeven_triggered = False
+        
         # Save state
         self.save_capital_state()
         
@@ -1927,6 +1945,10 @@ class SimpleRSIStrategy:
         self.last_short_price = None
         self.short_position_size = 0.0
         self.lowest_price_since_short = None
+        
+        # Reset trailing stop and breakeven for short position
+        self.short_trailing_stop_price = None
+        self.short_breakeven_triggered = False
         
         # Save state
         self.save_capital_state()
@@ -2198,11 +2220,47 @@ class SimpleRSIStrategy:
             if self.long_position:
                 if self.highest_price_since_buy is None or current_price > self.highest_price_since_buy:
                     self.highest_price_since_buy = current_price
+                
+                # Update trailing stop for long position
+                if self.use_trailing_stop and self.highest_price_since_buy:
+                    long_profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+                    if long_profit_pct >= self.trailing_stop_activation_pct:
+                        # Activate trailing stop
+                        new_trailing_stop = self.highest_price_since_buy * (1 - self.trailing_stop_distance_pct / 100)
+                        if self.trailing_stop_price is None or new_trailing_stop > self.trailing_stop_price:
+                            self.trailing_stop_price = new_trailing_stop
+                            bot_logger.info(f"Trailing stop updated to ${self.trailing_stop_price:.4f} (highest: ${self.highest_price_since_buy:.4f})")
+                
+                # Update breakeven for long position
+                if self.use_breakeven and not self.breakeven_triggered:
+                    long_profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+                    if long_profit_pct >= self.breakeven_activation_pct:
+                        self.breakeven_triggered = True
+                        breakeven_price = self.last_buy_price * (1 + self.breakeven_offset_pct / 100)
+                        bot_logger.info(f"Breakeven triggered at ${breakeven_price:.4f}")
             
             # Update lowest price for trailing stop (short positions)
             if self.short_position:
                 if self.lowest_price_since_short is None or current_price < self.lowest_price_since_short:
                     self.lowest_price_since_short = current_price
+                
+                # Update trailing stop for short position
+                if self.use_trailing_stop and self.lowest_price_since_short:
+                    short_profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
+                    if short_profit_pct >= self.trailing_stop_activation_pct:
+                        # Activate trailing stop (trails upward for shorts)
+                        new_trailing_stop = self.lowest_price_since_short * (1 + self.trailing_stop_distance_pct / 100)
+                        if self.short_trailing_stop_price is None or new_trailing_stop < self.short_trailing_stop_price:
+                            self.short_trailing_stop_price = new_trailing_stop
+                            bot_logger.info(f"Short trailing stop updated to ${self.short_trailing_stop_price:.4f} (lowest: ${self.lowest_price_since_short:.4f})")
+                
+                # Update breakeven for short position
+                if self.use_breakeven and not self.short_breakeven_triggered:
+                    short_profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
+                    if short_profit_pct >= self.breakeven_activation_pct:
+                        self.short_breakeven_triggered = True
+                        breakeven_price = self.last_short_price * (1 - self.breakeven_offset_pct / 100)
+                        bot_logger.info(f"Short breakeven triggered at ${breakeven_price:.4f}")
             
             # Calculate profit percentage for both positions
             long_profit_pct = 0
@@ -2813,6 +2871,40 @@ class SimpleRSIStrategy:
         """Evaluate sell signals - extracted from main logic for state machine"""
         should_sell = False
         reason = ""
+        
+        # Check trailing stop for long position
+        if self.long_position and self.use_trailing_stop and self.trailing_stop_price:
+            if current_price <= self.trailing_stop_price:
+                should_sell = True
+                reason = f"Trailing stop hit at ${current_price:.4f}"
+                bot_logger.info(f"TRAILING STOP TRIGGERED: {reason}")
+                return should_sell, reason
+        
+        # Check breakeven for long position
+        if self.long_position and self.use_breakeven and self.breakeven_triggered:
+            breakeven_price = self.last_buy_price * (1 + self.breakeven_offset_pct / 100)
+            if current_price <= breakeven_price:
+                should_sell = True
+                reason = f"Breakeven hit at ${current_price:.4f}"
+                bot_logger.info(f"BREAKEVEN TRIGGERED: {reason}")
+                return should_sell, reason
+        
+        # Check trailing stop for short position
+        if self.short_position and self.use_trailing_stop and self.short_trailing_stop_price:
+            if current_price >= self.short_trailing_stop_price:
+                should_sell = True
+                reason = f"Short trailing stop hit at ${current_price:.4f}"
+                bot_logger.info(f"SHORT TRAILING STOP TRIGGERED: {reason}")
+                return should_sell, reason
+        
+        # Check breakeven for short position
+        if self.short_position and self.use_breakeven and self.short_breakeven_triggered:
+            breakeven_price = self.last_short_price * (1 - self.breakeven_offset_pct / 100)
+            if current_price >= breakeven_price:
+                should_sell = True
+                reason = f"Short breakeven hit at ${current_price:.4f}"
+                bot_logger.info(f"SHORT BREAKEVEN TRIGGERED: {reason}")
+                return should_sell, reason
         
         # Use ATR-based TP/SL if enabled, otherwise use dynamic fixed percentages
         if self.use_atr_tp_sl:
