@@ -11,6 +11,17 @@ from dotenv import load_dotenv
 from ml_models import MLTradingEnsemble, PricePredictionLSTM, SignalConfirmationRF, PatternRecognitionNN
 from openai_market_analyzer import OpenAIMarketAnalyzer
 from coin_scanner import CoinScanner
+from enum import Enum
+
+# State machine states
+class TradingState(Enum):
+    IDLE_SCANNING = "IDLE_SCANNING"
+    ENTRY_SIGNAL = "ENTRY_SIGNAL"
+    OPEN_POSITION = "OPEN_POSITION"
+    MONITOR_POSITION = "MONITOR_POSITION"
+    POSITION_CLOSED = "POSITION_CLOSED"
+    RESET_STATE = "RESET_STATE"
+    COOLDOWN = "COOLDOWN"
 
 # Set up bot logger for centralized logging
 bot_logger = logging.getLogger('bot')
@@ -177,10 +188,24 @@ class SimpleRSIStrategy:
         self.best_trade_profit = 0.0
         self.worst_trade_loss = 0.0
         
+        # State machine
+        self.trading_state = TradingState.IDLE_SCANNING
+        self.last_state_transition_time = time.time()
+        self.cooldown_end_time = 0
+        self.last_entry_signal_time = 0
+        
         # Load saved state
         self.load_capital_state()
         
         bot_logger.info(f"Strategy initialized with {self.VOLATILITY_MULTIPLIER}x volatility multiplier")
+        bot_logger.info(f"Initial state: {self.trading_state.value}")
+    
+    def transition_state(self, new_state, reason=""):
+        """Transition to a new state with logging"""
+        old_state = self.trading_state
+        self.trading_state = new_state
+        self.last_state_transition_time = time.time()
+        bot_logger.info(f"STATE TRANSITION: {old_state.value} → {new_state.value} | Reason: {reason} | Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     def load_capital_state(self):
         """Load capital state from file for persistence"""
@@ -1388,8 +1413,8 @@ class SimpleRSIStrategy:
         return None
     
     def handle_trade_event(self, current_price):
-        """Main trading logic"""
-        bot_logger.info(f"=== handle_trade_event called === Price: ${current_price:.2f}, Position: {self.current_position}")
+        """Main trading logic with state machine for continuous trading"""
+        bot_logger.info(f"=== handle_trade_event called === Price: ${current_price:.2f}, Position: {self.current_position}, State: {self.trading_state.value}")
         
         # Scan for best pair if enabled
         if self.enable_coin_scanner and self.symbol == 'AUTO':
@@ -1406,13 +1431,18 @@ class SimpleRSIStrategy:
         if len(self.price_history) > 100:
             self.price_history.pop(0)
         
-        bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {self.current_position or 'None'} | Trades: {self.trade_count}")
+        bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {self.current_position or 'None'} | Trades: {self.trade_count} | State: {self.trading_state.value}")
         
         # Need at least some data for indicators
         if len(self.price_history) < 5:
             if self.current_position is None and self.trade_count == 0:
                 # Force first trade
+                bot_logger.info("Forcing first trade (insufficient data for indicators)")
+                self.transition_state(TradingState.ENTRY_SIGNAL, "Force first trade")
                 self.place_buy_order(current_price)
+                if self.current_position == 'long':
+                    self.transition_state(TradingState.OPEN_POSITION, "Position opened")
+                    self.transition_state(TradingState.MONITOR_POSITION, "Start monitoring")
             return
         
         # Calculate indicators using complex strategy
@@ -1456,426 +1486,56 @@ class SimpleRSIStrategy:
         
         bot_logger.info(f"RSI: {rsi:.1f} | Trend: {trend} | MACD: {'BULL' if macd_bullish else 'BEAR'} | BB: {'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'} | EMA: {'BULL' if ema_short > ema_long else 'BEAR'} | SMA: {'ABOVE' if price_above_sma else 'BELOW'} | Mom: {'POS' if momentum_positive else 'NEG'} | ATR: {atr:.4f} | Regime: {market_regime} | Engulfing: {engulfing_pattern or 'NONE'} | PinBar: {pin_bar or 'NONE'} | Vol: {self.VOLATILITY_MULTIPLIER}x")
         
-        # Trading logic
-        if self.current_position is None:
-            # Complex buy signals - require multiple confirmations
-            bullish_signals = 0
-            total_signals = 0
-            
-            # RSI signals
-            total_signals += 1
-            if rsi < self.rsi_oversold:
-                bullish_signals += 1
-            elif rsi < 40:
-                bullish_signals += 0.5
-            
-            # Trend signals
-            total_signals += 1
-            if trend == "BULLISH":
-                bullish_signals += 1
-            
-            # EMA crossover
-            total_signals += 1
-            if ema_short > ema_long:
-                bullish_signals += 1
-            
-            # SMA position
-            total_signals += 1
-            if price_above_sma:
-                bullish_signals += 1
-            
-            # MACD
-            total_signals += 1
-            if macd_bullish:
-                bullish_signals += 1
-            
-            # Momentum
-            total_signals += 1
-            if momentum_positive:
-                bullish_signals += 1
-            
-            # Bollinger Bands
-            total_signals += 1
-            if price_near_lower:
-                bullish_signals += 1
-            
-            # RSI divergence
-            total_signals += 1
-            if rsi_divergence:
-                bullish_signals += 1
-            
-            # Bullish breakout
-            total_signals += 1
-            if bullish_breakout:
-                bullish_signals += 1
-            
-            # Engulfing pattern - highly reliable for gold
-            total_signals += 2  # Give it more weight
-            if engulfing_pattern == "BULLISH_ENGULFING":
-                bullish_signals += 2  # Strong signal
-            elif engulfing_pattern == "BEARISH_ENGULFING":
-                bullish_signals -= 1  # Negative signal
-            
-            # Pin bar - clean signals for gold
-            total_signals += 1
-            if pin_bar == "BULLISH_PIN_BAR":
-                bullish_signals += 1
-            elif pin_bar == "BEARISH_PIN_BAR":
-                bullish_signals -= 0.5
-            
-            # Market regime bonus/penalty
-            total_signals += 1
-            if "TRENDING_UP" in market_regime:
-                bullish_signals += 1
-            elif "TRENDING_DOWN" in market_regime:
-                bullish_signals -= 0.5
-            
-            # Volatility adjustment
-            if "HIGH_VOL" in market_regime:
-                # Be more cautious in high volatility
-                total_signals += 0.5
-            elif "LOW_VOL" in market_regime:
-                # Can be more aggressive in low volatility
-                total_signals -= 0.5
-            
-            # Calculate bullish percentage
-            bullish_pct = (bullish_signals / total_signals) * 100 if total_signals > 0 else 0
-            
-            # Adaptive threshold based on recent performance
-            if len(self.recent_trades) >= 5:
-                recent_wins = sum(1 for t in self.recent_trades[-5:] if t['profit'] > 0)
-                if recent_wins >= 4:  # Hot streak - be more aggressive
-                    self.min_confidence_threshold = 0.10
-                elif recent_wins <= 1:  # Cold streak - be more conservative
-                    self.min_confidence_threshold = 0.25
-                else:
-                    self.min_confidence_threshold = 0.15
+        # STATE MACHINE LOGIC
+        if self.trading_state == TradingState.COOLDOWN:
+            # Check if cooldown period is over
+            if time.time() >= self.cooldown_end_time:
+                self.transition_state(TradingState.IDLE_SCANNING, "Cooldown period ended")
             else:
-                # Default threshold for consistent buying - extremely permissive
-                self.min_confidence_threshold = 0.10
-            
-            # ML-Primary Trading Decision
-            if self.ml_enabled and self.use_ml_signals and len(self.price_history) >= 5:
-                try:
-                    # Create DataFrame for ML prediction
-                    ml_data = pd.DataFrame({
-                        'close': self.price_history,
-                        'volume': [1] * len(self.price_history),  # Placeholder volume
-                        'open': self.price_history,  # Use close as placeholder
-                        'high': self.price_history,  # Use close as placeholder
-                        'low': self.price_history   # Use close as placeholder
-                    })
-                    
-                    ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
-                    
-                    if ml_signals:
-                        bot_logger.info(f"ML Signals: {ml_signals}")
-                        
-                        # ML-Primary Decision Logic
-                        ml_buy_score = 0
-                        ml_sell_score = 0
-                        
-                        # LSTM prediction (price direction)
-                        if 'lstm' in ml_signals:
-                            lstm_pred = ml_signals['lstm']
-                            price_change_pct = ((lstm_pred - current_price) / current_price) * 100
-                            
-                            if price_change_pct > 0.5:  # Strong bullish prediction
-                                ml_buy_score += 3
-                            elif price_change_pct > 0.2:  # Moderate bullish
-                                ml_buy_score += 2
-                            elif price_change_pct < -0.5:  # Strong bearish
-                                ml_sell_score += 3
-                            elif price_change_pct < -0.2:  # Moderate bearish
-                                ml_sell_score += 2
-                        
-                        # Random Forest signal
-                        if 'random_forest' in ml_signals:
-                            rf_signal = ml_signals['random_forest']
-                            if rf_signal['signal'] == 1:
-                                if rf_signal['confidence'] > 0.7:
-                                    ml_buy_score += 4  # Strong buy signal
-                                elif rf_signal['confidence'] > 0.5:
-                                    ml_buy_score += 2  # Moderate buy signal
-                            elif rf_signal['signal'] == 0:
-                                if rf_signal['confidence'] > 0.7:
-                                    ml_sell_score += 4  # Strong sell signal
-                                elif rf_signal['confidence'] > 0.5:
-                                    ml_sell_score += 2  # Moderate sell signal
-                        
-                        # ML-Primary Decision with OpenAI Integration
-                        if self.openai_enabled:
-                            # Get OpenAI market analysis
-                            price_df = pd.DataFrame({'close': self.price_history})
-                            openai_signal = self.openai_analyzer.analyze_market_conditions(price_df, current_price)
-                            
-                            # Cross-reference OpenAI and ML signals
-                            combined_signal = self.openai_analyzer.cross_reference_signals(
-                                openai_signal, ml_buy_score, ml_sell_score
-                            )
-                            
-                            bot_logger.info(f"Combined Signal: {combined_signal['recommendation']} (confidence: {combined_signal['confidence']})")
-                            bot_logger.info(f"Reasoning: {combined_signal['reasoning']}")
-                            
-                            # Track last AI signal for display
-                            self.last_ai_signal = combined_signal['recommendation']
-                            self.last_ai_confidence = combined_signal['confidence']
-                            
-                            # Use combined signal for decision
-                            if 'STRONG BUY' in combined_signal['recommendation']:
-                                should_buy = True
-                                bullish_pct = 100
-                                bot_logger.info("COMBINED STRONG BUY signal")
-                            elif 'BUY' in combined_signal['recommendation']:
-                                should_buy = True
-                                bullish_pct = max(bullish_pct, 80)
-                                bot_logger.info("COMBINED BUY signal")
-                            elif 'STRONG SELL' in combined_signal['recommendation']:
-                                should_buy = False
-                                bullish_pct = 0
-                                bot_logger.info("COMBINED STRONG SELL signal")
-                            elif 'SELL' in combined_signal['recommendation']:
-                                should_buy = False
-                                bullish_pct = min(bullish_pct, 20)
-                                bot_logger.info("COMBINED SELL signal")
-                            else:
-                                # Fallback to ML-only logic
-                                if self.ml_only:
-                                    if ml_buy_score >= 3:
-                                        should_buy = True
-                                        bullish_pct = 100
-                                        bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
-                                    elif ml_sell_score >= 3:
-                                        should_buy = False
-                                        bullish_pct = 0
-                                        bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
-                                    else:
-                                        should_buy = False
-                                        bot_logger.info(f"ML-ONLY uncertain - no trade")
-                                else:
-                                    if ml_buy_score >= 5:
-                                        should_buy = True
-                                        bullish_pct = 100
-                                        bot_logger.info(f"ML STRONG BUY signal - score: {ml_buy_score}")
-                                    elif ml_buy_score >= 2:
-                                        should_buy = True
-                                        bullish_pct = max(bullish_pct, 70)
-                                        bot_logger.info(f"ML BUY signal - score: {ml_buy_score}")
-                                    elif ml_sell_score >= 3:
-                                        should_buy = False
-                                        bullish_pct = 0
-                                        bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
-                                    else:
-                                        should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
-                                        bot_logger.info(f"ML uncertain - using traditional indicators")
-                        elif self.ml_only:
-                            # ML-Only Mode: Ignore traditional indicators completely
-                            if ml_buy_score >= 2:  # Lowered from 3 for more frequent trades
-                                should_buy = True
-                                bullish_pct = 100  # ML-only mode
-                                bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
-                            elif ml_sell_score >= 2:  # Lowered from 3 for more frequent trades
-                                should_buy = False
-                                bullish_pct = 0  # ML-only mode
-                                bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
-                            else:
-                                should_buy = False  # ML uncertain - don't trade
-                                bot_logger.info(f"ML-ONLY uncertain - no trade")
-                        else:
-                            # ML-Enhanced Mode: Use ML as primary, traditional as fallback
-                            if ml_buy_score >= 5:
-                                should_buy = True
-                                bullish_pct = 100  # Override traditional indicators
-                                bot_logger.info(f"ML STRONG BUY signal - score: {ml_buy_score}")
-                            elif ml_buy_score >= 2:
-                                should_buy = True
-                                bullish_pct = max(bullish_pct, 70)  # Boost confidence
-                                bot_logger.info(f"ML BUY signal - score: {ml_buy_score}")
-                            elif ml_sell_score >= 3:
-                                should_buy = False
-                                bullish_pct = 0  # Override traditional indicators
-                                bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
-                            else:
-                                # Fallback to traditional indicators if ML is uncertain
-                                should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
-                                bot_logger.info(f"ML uncertain - using traditional indicators")
-                            
-                        bot_logger.info(f"Final bullish percentage: {bullish_pct:.1f}%")
-                        
-                except Exception as e:
-                    bot_logger.warning(f"ML signal integration failed: {e}")
-                    if self.ml_only:
-                        should_buy = False  # ML-only mode: don't trade if ML fails
-                    else:
-                        # Fallback to traditional indicators
-                        should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
-            else:
-                # IMPROVED BUY TIMING with enhanced traditional indicators
-                # Momentum confirmation for better entry timing
-                momentum_surge = momentum > 0 and momentum > self.price_history[-2] - self.price_history[-3] if len(self.price_history) >= 3 else False
-                
-                # Volume spike confirmation (if we had real volume data)
-                volume_confirmation = True  # Placeholder since we don't have real volume
-                
-                # Price action confirmation - recent upward movement
-                price_action_bullish = current_price > self.price_history[-5] if len(self.price_history) >= 5 else True
-                
-                # Optimal entry conditions
-                optimal_entry = (
-                    rsi < 40 and  # Not overbought
-                    ema_short > ema_long and  # Uptrend
-                    macd_bullish and  # MACD bullish
-                    momentum_positive and  # Positive momentum
-                    price_near_lower  # Near support
-                )
-                
-                # Enhanced buy conditions with timing confirmation
-                if optimal_entry and momentum_surge and volume_confirmation:
-                    should_buy = True
-                    bullish_pct = 100
-                    bot_logger.info("OPTIMAL ENTRY: All timing conditions met")
-                elif bullish_pct >= (adaptive_threshold * 100):
-                    # Standard buy with timing confirmation
-                    if momentum_surge and price_action_bullish:
-                        should_buy = True
-                        bot_logger.info("BUY with momentum confirmation")
-                    else:
-                        should_buy = bullish_pct >= (adaptive_threshold * 100)
-                else:
-                    should_buy = bullish_pct >= (adaptive_threshold * 100)
-            
-            # Force buy if no trades yet and we have some bullish signals
-            if self.trade_count == 0 and bullish_pct > 0:
-                should_buy = True
-            
-            # Apply BTC market weather filter
-            if self.use_btc_weather and btc_weather:
-                if btc_weather['signal'] == 'STRONG_BEARISH':
-                    # Don't trade if BTC is strongly bearish
-                    should_buy = False
-                    bot_logger.warning("BTC strongly bearish - trade blocked")
-                elif btc_weather['signal'] == 'BEARISH':
-                    # Reduce position size or confidence if BTC is bearish
-                    bullish_pct *= (1 - self.btc_weather_weight)
-                    bot_logger.info(f"BTC bearish - reduced bullish confidence to {bullish_pct:.1f}%")
-                elif btc_weather['signal'] == 'STRONG_BULLISH':
-                    # Boost confidence if BTC is strongly bullish
-                    bullish_pct *= (1 + self.btc_weather_weight)
-                    bot_logger.info(f"BTC strongly bullish - boosted confidence to {bullish_pct:.1f}%")
-            
-            # Apply relative strength filter
-            if self.use_relative_strength and relative_strength:
-                if relative_strength['signal'] == 'STRONG_OUTPERFORMING':
-                    # Boost confidence if strongly outperforming BTC
-                    bullish_pct *= (1 + self.relative_strength_weight)
-                    bot_logger.info(f"Strongly outperforming BTC - boosted confidence to {bullish_pct:.1f}%")
-                elif relative_strength['signal'] == 'OUTPERFORMING':
-                    # Slightly boost confidence if outperforming BTC
-                    bullish_pct *= (1 + self.relative_strength_weight * 0.5)
-                    bot_logger.info(f"Outperforming BTC - boosted confidence to {bullish_pct:.1f}%")
-                elif relative_strength['signal'] == 'STRONG_UNDERPERFORMING':
-                    # Reduce confidence if strongly underperforming BTC
-                    bullish_pct *= (1 - self.relative_strength_weight)
-                    bot_logger.info(f"Strongly underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
-                elif relative_strength['signal'] == 'UNDERPERFORMING':
-                    # Slightly reduce confidence if underperforming BTC
-                    bullish_pct *= (1 - self.relative_strength_weight * 0.5)
-                    bot_logger.info(f"Underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
-            
-            # Calculate 100-point setup score
-            setup_score = self.calculate_setup_score(
-                rsi, trend, ema_short, ema_long, macd_bullish, price_near_lower,
-                btc_weather, relative_strength, ml_buy_score if self.ml_enabled else 0, market_regime
-            )
-            
-            # Apply setup score filter
-            if self.use_setup_score and setup_score < self.min_setup_score:
-                should_buy = False
-                bot_logger.warning(f"Setup score too low: {setup_score} < {self.min_setup_score} - trade blocked")
-            
-            # Apply don't trade engine filters
-            should_block, block_reason = self.should_block_trade(current_price)
-            if should_block:
-                should_buy = False
-                bot_logger.warning(f"Don't trade engine blocked trade: {block_reason}")
-            
-            # Use adaptive confidence threshold
-            adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
-            
-            bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% ({bullish_signals:.1f}/{total_signals}) | Setup Score={setup_score}/100 | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
-            
-            if should_buy:
-                # Calculate trade amount for profitability check
-                base_trade_amount = self.current_capital * (self.capital_percentage / 100)
-                
-                # Calculate target price based on ATR or fixed TP
-                if self.use_atr_tp_sl:
-                    dynamic_tp, _ = self.calculate_atr_tp_sl(current_price, market_regime)
-                else:
-                    dynamic_tp = self.take_profit_pct
-                    
-                target_price = current_price * (1 + dynamic_tp / 100)
-                
-                # Check if trade is profitable after costs
-                if not self.is_trade_profitable(current_price, target_price, base_trade_amount):
-                    bot_logger.warning("Trade rejected: Not profitable after trading costs")
-                    should_buy = False
-            
-            if should_buy:
-                self.place_buy_order(current_price)
+                cooldown_remaining = int(self.cooldown_end_time - time.time())
+                bot_logger.info(f"In cooldown - {cooldown_remaining}s remaining")
+                return
         
-        elif self.current_position == 'long':
-            # Update AI signal during position for continuous monitoring
-            if self.ml_enabled and self.openai_enabled:
-                try:
-                    ml_data = pd.DataFrame({
-                        'close': self.price_history,
-                        'volume': [1] * len(self.price_history),
-                        'open': self.price_history,
-                        'high': self.price_history,
-                        'low': self.price_history
-                    })
-                    
-                    ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
-                    
-                    if ml_signals:
-                        ml_buy_score = 0
-                        ml_sell_score = 0
-                        
-                        if 'lstm' in ml_signals:
-                            lstm_pred = ml_signals['lstm']
-                            price_change_pct = ((lstm_pred - current_price) / current_price) * 100
-                            if price_change_pct > 0.5:
-                                ml_buy_score += 3
-                            elif price_change_pct > 0.2:
-                                ml_buy_score += 2
-                            elif price_change_pct < -0.5:
-                                ml_sell_score += 3
-                            elif price_change_pct < -0.2:
-                                ml_sell_score += 2
-                        
-                        if 'random_forest' in ml_signals:
-                            rf_signal = ml_signals['random_forest']
-                            if rf_signal == 'buy':
-                                ml_buy_score += 2
-                            elif rf_signal == 'sell':
-                                ml_sell_score += 2
-                        
-                        # Get OpenAI analysis during position
-                        price_df = pd.DataFrame({'close': self.price_history})
-                        openai_signal = self.openai_analyzer.analyze_market_conditions(price_df, current_price)
-                        
-                        # Cross-reference signals
-                        combined_signal = self.openai_analyzer.cross_reference_signals(
-                            openai_signal, ml_buy_score, ml_sell_score
-                        )
-                        
-                        # Update last AI signal for display
-                        self.last_ai_signal = combined_signal['recommendation']
-                        self.last_ai_confidence = combined_signal['confidence']
-                        
-                except Exception as e:
-                    bot_logger.warning(f"AI signal update during position failed: {e}")
+        if self.trading_state == TradingState.IDLE_SCANNING:
+            # Check if we should enter cooldown
+            if self.use_dont_trade_engine and self.consecutive_losses >= self.max_consecutive_losses:
+                self.cooldown_end_time = time.time() + (self.cooling_off_period * 60)
+                self.transition_state(TradingState.COOLDOWN, f"Max consecutive losses ({self.consecutive_losses}) reached")
+                return
+            
+            # Transition to ENTRY_SIGNAL if no position
+            if self.current_position is None:
+                self.transition_state(TradingState.ENTRY_SIGNAL, "No position - scanning for entry")
+        
+        if self.trading_state == TradingState.ENTRY_SIGNAL:
+            # Check for entry conditions
+            if self.current_position is not None:
+                # Already have a position, transition to monitoring
+                self.transition_state(TradingState.MONITOR_POSITION, "Position already open")
+                return
+            
+            # Evaluate buy signals (existing logic)
+            should_buy = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish, 
+                                                   momentum_positive, price_near_lower, rsi_divergence, 
+                                                   bullish_breakout, engulfing_pattern, pin_bar, market_regime,
+                                                   btc_weather, relative_strength, current_price)
+            
+            if should_buy:
+                self.last_entry_signal_time = time.time()
+                self.transition_state(TradingState.OPEN_POSITION, "Entry signal confirmed")
+                self.place_buy_order(current_price)
+                if self.current_position == 'long':
+                    self.transition_state(TradingState.MONITOR_POSITION, "Position opened successfully")
+                else:
+                    self.transition_state(TradingState.IDLE_SCANNING, "Position open failed - return to scanning")
+            else:
+                bot_logger.info("No valid entry signal - continue scanning")
+        
+        elif self.trading_state == TradingState.MONITOR_POSITION:
+            if self.current_position != 'long':
+                # Position was closed externally, transition to reset
+                self.transition_state(TradingState.POSITION_CLOSED, "Position closed externally")
+                return
             
             # Update highest price for trailing stop
             if current_price > self.highest_price_since_buy:
@@ -1891,66 +1551,469 @@ class SimpleRSIStrategy:
             if partial_tp_taken:
                 return  # Exit after partial TP, position may be closed
             
-            # Sell signals - IMPROVED TIMING with ATR-based TP/SL
-            should_sell = False
-            reason = ""
-            
-            # Use ATR-based TP/SL if enabled, otherwise use dynamic fixed percentages
-            if self.use_atr_tp_sl:
-                dynamic_tp, dynamic_sl = self.calculate_atr_tp_sl(current_price, market_regime)
-            else:
-                # Dynamic take profit based on market conditions (legacy method)
-                dynamic_tp = self.take_profit_pct
-                if "HIGH_VOL" in market_regime:
-                    dynamic_tp *= 1.5  # Higher targets in volatile markets
-                elif "LOW_VOL" in market_regime:
-                    dynamic_tp *= 0.8  # Lower targets in calm markets
-                dynamic_sl = self.stop_loss_pct
-            
-            # Take profit with dynamic adjustment
-            if profit_pct >= dynamic_tp - 0.01:  # Larger tolerance for floating point precision
-                should_sell = True
-                reason = f"Take Profit ({dynamic_tp:.2f}%)"
-                bot_logger.info(f"Take profit triggered at {profit_pct:.2f}% (target: {dynamic_tp:.2f}%)")
-            
-            # Improved stop loss with ATR-based adjustment
-            elif profit_pct <= -dynamic_sl:
-                should_sell = True
-                reason = "Stop Loss"
-                bot_logger.info(f"Stop loss triggered at {profit_pct:.2f}%")
-            
-            # Enhanced trailing stop with dynamic adjustment
-            elif self.highest_price_since_buy > self.last_buy_price:
-                trailing_stop_pct = ((self.highest_price_since_buy - current_price) / self.highest_price_since_buy) * 100
-                dynamic_trailing = 0.5 if "HIGH_VOL" in market_regime else 1.0
-                if trailing_stop_pct >= dynamic_trailing and profit_pct > 1.0:
-                    should_sell = True
-                    reason = f"Trailing Stop ({dynamic_trailing:.1f}%)"
-                    bot_logger.info(f"Trailing stop triggered at {trailing_stop_pct:.2f}% with profit {profit_pct:.2f}%")
-            
-            # RSI-based exit for overbought conditions
-            elif rsi > 75 and profit_pct > 0.5:
-                should_sell = True
-                reason = "RSI Overbought"
-                bot_logger.info(f"RSI overbought exit at {rsi:.1f} with profit {profit_pct:.2f}%")
-            
-            # MACD bearish crossover for timing
-            elif macd_bearish and profit_pct > 0.3:
-                should_sell = True
-                reason = "MACD Bearish Crossover"
-                bot_logger.info(f"MACD bearish crossover with profit {profit_pct:.2f}%")
-            
-            # Price below EMA short as exit signal
-            elif current_price < ema_short and profit_pct > 0.5:
-                should_sell = True
-                reason = "Price Below EMA Short"
-                bot_logger.info(f"Price below EMA short with profit {profit_pct:.2f}%")
-            
-            # Force sell after extended hold if not profitable
-            elif len(self.price_history) > 300 and self.current_position == 'long' and profit_pct < 0.2:
-                should_sell = True
-                reason = "Max Hold Time (Low Profit)"
-                bot_logger.info(f"Forcing sell due to max hold time at low profit {profit_pct:.2f}%")
+            # Evaluate sell signals
+            should_sell, reason = self.evaluate_sell_signals(profit_pct, current_price, rsi, macd_bearish, 
+                                                             ema_short, market_regime, dynamic_tp=None, dynamic_sl=None)
             
             if should_sell:
+                self.transition_state(TradingState.POSITION_CLOSED, f"Exit signal: {reason}")
                 self.place_sell_order(current_price, reason)
+                if self.current_position is None:
+                    self.transition_state(TradingState.RESET_STATE, "Position closed successfully")
+        
+        elif self.trading_state == TradingState.POSITION_CLOSED:
+            # Ensure position is fully closed
+            if self.current_position is None:
+                self.transition_state(TradingState.RESET_STATE, "Position confirmed closed")
+            else:
+                bot_logger.warning("Position not fully closed - waiting for confirmation")
+        
+        elif self.trading_state == TradingState.RESET_STATE:
+            # Reset all trade-specific variables
+            self.current_position = None
+            self.last_buy_price = None
+            self.position_size = 0.0
+            self.highest_price_since_buy = None
+            self.partial_tps_taken = []
+            
+            bot_logger.info(f"Trade reset complete | Capital: ${self.current_capital:.2f} | Trades: {self.trade_count}")
+            
+            # Save state
+            self.save_capital_state()
+            
+            # Return to scanning for next trade
+            self.transition_state(TradingState.IDLE_SCANNING, "Ready for next trade")
+    
+    def evaluate_buy_signals(self, rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish, 
+                           momentum_positive, price_near_lower, rsi_divergence, bullish_breakout, 
+                           engulfing_pattern, pin_bar, market_regime, btc_weather, relative_strength, current_price):
+        """Evaluate buy signals - extracted from main logic for state machine"""
+        should_buy = False
+        bullish_signals = 0
+        total_signals = 0
+        
+        # RSI signals
+        total_signals += 1
+        if rsi < self.rsi_oversold:
+            bullish_signals += 1
+        elif rsi < 40:
+            bullish_signals += 0.5
+        
+        # Trend signals
+        total_signals += 1
+        if trend == "BULLISH":
+            bullish_signals += 1
+        
+        # EMA crossover
+        total_signals += 1
+        if ema_short > ema_long:
+            bullish_signals += 1
+        
+        # SMA position
+        total_signals += 1
+        if price_above_sma:
+            bullish_signals += 1
+        
+        # MACD
+        total_signals += 1
+        if macd_bullish:
+            bullish_signals += 1
+        
+        # Momentum
+        total_signals += 1
+        if momentum_positive:
+            bullish_signals += 1
+        
+        # Bollinger Bands
+        total_signals += 1
+        if price_near_lower:
+            bullish_signals += 1
+        
+        # RSI divergence
+        total_signals += 1
+        if rsi_divergence:
+            bullish_signals += 1
+        
+        # Bullish breakout
+        total_signals += 1
+        if bullish_breakout:
+            bullish_signals += 1
+        
+        # Engulfing pattern - highly reliable for gold
+        total_signals += 2  # Give it more weight
+        if engulfing_pattern == "BULLISH_ENGULFING":
+            bullish_signals += 2  # Strong signal
+        elif engulfing_pattern == "BEARISH_ENGULFING":
+            bullish_signals -= 1  # Negative signal
+        
+        # Pin bar - clean signals for gold
+        total_signals += 1
+        if pin_bar == "BULLISH_PIN_BAR":
+            bullish_signals += 1
+        elif pin_bar == "BEARISH_PIN_BAR":
+            bullish_signals -= 0.5
+        
+        # Market regime bonus/penalty
+        total_signals += 1
+        if "TRENDING_UP" in market_regime:
+            bullish_signals += 1
+        elif "TRENDING_DOWN" in market_regime:
+            bullish_signals -= 0.5
+        
+        # Volatility adjustment
+        if "HIGH_VOL" in market_regime:
+            # Be more cautious in high volatility
+            total_signals += 0.5
+        elif "LOW_VOL" in market_regime:
+            # Can be more aggressive in low volatility
+            total_signals -= 0.5
+        
+        # Calculate bullish percentage
+        bullish_pct = (bullish_signals / total_signals) * 100 if total_signals > 0 else 0
+        
+        # Adaptive threshold based on recent performance
+        if len(self.recent_trades) >= 5:
+            recent_wins = sum(1 for t in self.recent_trades[-5:] if t['profit'] > 0)
+            if recent_wins >= 4:  # Hot streak - be more aggressive
+                self.min_confidence_threshold = 0.10
+            elif recent_wins <= 1:  # Cold streak - be more conservative
+                self.min_confidence_threshold = 0.25
+            else:
+                self.min_confidence_threshold = 0.15
+        else:
+            # Default threshold for consistent buying - extremely permissive
+            self.min_confidence_threshold = 0.10
+        
+        # ML-Primary Trading Decision
+        if self.ml_enabled and self.use_ml_signals and len(self.price_history) >= 5:
+            try:
+                # Create DataFrame for ML prediction
+                ml_data = pd.DataFrame({
+                    'close': self.price_history,
+                    'volume': [1] * len(self.price_history),  # Placeholder volume
+                    'open': self.price_history,  # Use close as placeholder
+                    'high': self.price_history,  # Use close as placeholder
+                    'low': self.price_history   # Use close as placeholder
+                })
+                
+                ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
+                
+                if ml_signals:
+                    bot_logger.info(f"ML Signals: {ml_signals}")
+                    
+                    # ML-Primary Decision Logic
+                    ml_buy_score = 0
+                    ml_sell_score = 0
+                    
+                    # LSTM prediction (price direction)
+                    if 'lstm' in ml_signals:
+                        lstm_pred = ml_signals['lstm']
+                        price_change_pct = ((lstm_pred - current_price) / current_price) * 100
+                        
+                        if price_change_pct > 0.5:  # Strong bullish prediction
+                            ml_buy_score += 3
+                        elif price_change_pct > 0.2:  # Moderate bullish
+                            ml_buy_score += 2
+                        elif price_change_pct < -0.5:  # Strong bearish
+                            ml_sell_score += 3
+                        elif price_change_pct < -0.2:  # Moderate bearish
+                            ml_sell_score += 2
+                    
+                    # Random Forest signal
+                    if 'random_forest' in ml_signals:
+                        rf_signal = ml_signals['random_forest']
+                        if rf_signal['signal'] == 1:
+                            if rf_signal['confidence'] > 0.7:
+                                ml_buy_score += 4  # Strong buy signal
+                            elif rf_signal['confidence'] > 0.5:
+                                ml_buy_score += 2  # Moderate buy signal
+                        elif rf_signal['signal'] == 0:
+                            if rf_signal['confidence'] > 0.7:
+                                ml_sell_score += 4  # Strong sell signal
+                            elif rf_signal['confidence'] > 0.5:
+                                ml_sell_score += 2  # Moderate sell signal
+                    
+                    # ML-Primary Decision with OpenAI Integration
+                    if self.openai_enabled:
+                        # Get OpenAI market analysis
+                        price_df = pd.DataFrame({'close': self.price_history})
+                        openai_signal = self.openai_analyzer.analyze_market_conditions(price_df, current_price)
+                        
+                        # Cross-reference OpenAI and ML signals
+                        combined_signal = self.openai_analyzer.cross_reference_signals(
+                            openai_signal, ml_buy_score, ml_sell_score
+                        )
+                        
+                        bot_logger.info(f"Combined Signal: {combined_signal['recommendation']} (confidence: {combined_signal['confidence']})")
+                        bot_logger.info(f"Reasoning: {combined_signal['reasoning']}")
+                        
+                        # Track last AI signal for display
+                        self.last_ai_signal = combined_signal['recommendation']
+                        self.last_ai_confidence = combined_signal['confidence']
+                        
+                        # Use combined signal for decision
+                        if 'STRONG BUY' in combined_signal['recommendation']:
+                            should_buy = True
+                            bullish_pct = 100
+                            bot_logger.info("COMBINED STRONG BUY signal")
+                        elif 'BUY' in combined_signal['recommendation']:
+                            should_buy = True
+                            bullish_pct = max(bullish_pct, 80)
+                            bot_logger.info("COMBINED BUY signal")
+                        elif 'STRONG SELL' in combined_signal['recommendation']:
+                            should_buy = False
+                            bullish_pct = 0
+                            bot_logger.info("COMBINED STRONG SELL signal")
+                        elif 'SELL' in combined_signal['recommendation']:
+                            should_buy = False
+                            bullish_pct = min(bullish_pct, 20)
+                            bot_logger.info("COMBINED SELL signal")
+                        else:
+                            # Fallback to ML-only logic
+                            if self.ml_only:
+                                if ml_buy_score >= 3:
+                                    should_buy = True
+                                    bullish_pct = 100
+                                    bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
+                                elif ml_sell_score >= 3:
+                                    should_buy = False
+                                    bullish_pct = 0
+                                    bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
+                                else:
+                                    should_buy = False
+                                    bot_logger.info(f"ML-ONLY uncertain - no trade")
+                            else:
+                                if ml_buy_score >= 5:
+                                    should_buy = True
+                                    bullish_pct = 100
+                                    bot_logger.info(f"ML STRONG BUY signal - score: {ml_buy_score}")
+                                elif ml_buy_score >= 2:
+                                    should_buy = True
+                                    bullish_pct = max(bullish_pct, 70)
+                                    bot_logger.info(f"ML BUY signal - score: {ml_buy_score}")
+                                elif ml_sell_score >= 3:
+                                    should_buy = False
+                                    bullish_pct = 0
+                                    bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
+                                else:
+                                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                                    bot_logger.info(f"ML uncertain - using traditional indicators")
+                    elif self.ml_only:
+                        # ML-Only Mode: Ignore traditional indicators completely
+                        if ml_buy_score >= 2:  # Lowered from 3 for more frequent trades
+                            should_buy = True
+                            bullish_pct = 100  # ML-only mode
+                            bot_logger.info(f"ML-ONLY BUY signal - score: {ml_buy_score}")
+                        elif ml_sell_score >= 2:  # Lowered from 3 for more frequent trades
+                            should_buy = False
+                            bullish_pct = 0  # ML-only mode
+                            bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
+                        else:
+                            should_buy = False  # ML uncertain - don't trade
+                            bot_logger.info(f"ML-ONLY uncertain - no trade")
+                    else:
+                        # ML-Enhanced Mode: Use ML as primary, traditional as fallback
+                        if ml_buy_score >= 5:
+                            should_buy = True
+                            bullish_pct = 100  # Override traditional indicators
+                            bot_logger.info(f"ML STRONG BUY signal - score: {ml_buy_score}")
+                        elif ml_buy_score >= 2:
+                            should_buy = True
+                            bullish_pct = max(bullish_pct, 70)  # Boost confidence
+                            bot_logger.info(f"ML BUY signal - score: {ml_buy_score}")
+                        elif ml_sell_score >= 3:
+                            should_buy = False
+                            bullish_pct = 0  # Override traditional indicators
+                            bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
+                        else:
+                            # Fallback to traditional indicators if ML is uncertain
+                            should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+                            bot_logger.info(f"ML uncertain - using traditional indicators")
+                    
+                    bot_logger.info(f"Final bullish percentage: {bullish_pct:.1f}%")
+                    
+            except Exception as e:
+                bot_logger.warning(f"ML signal integration failed: {e}")
+                if self.ml_only:
+                    should_buy = False  # ML-only mode: don't trade if ML fails
+                else:
+                    # Fallback to traditional indicators
+                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+        else:
+            # IMPROVED BUY TIMING with enhanced traditional indicators
+            # Momentum confirmation for better entry timing
+            momentum_surge = momentum > 0 and momentum > self.price_history[-2] - self.price_history[-3] if len(self.price_history) >= 3 else False
+            
+            # Volume spike confirmation (if we had real volume data)
+            volume_confirmation = True  # Placeholder since we don't have real volume
+            
+            # Price action confirmation - recent upward movement
+            price_action_bullish = current_price > self.price_history[-5] if len(self.price_history) >= 5 else True
+            
+            # Optimal entry conditions
+            optimal_entry = (
+                rsi < 40 and  # Not overbought
+                ema_short > ema_long and  # Uptrend
+                macd_bullish and  # MACD bullish
+                momentum_positive and  # Positive momentum
+                price_near_lower  # Near support
+            )
+            
+            # Enhanced buy conditions with timing confirmation
+            if optimal_entry and momentum_surge and volume_confirmation:
+                should_buy = True
+                bullish_pct = 100
+                bot_logger.info("OPTIMAL ENTRY: All timing conditions met")
+            elif bullish_pct >= (self.min_confidence_threshold * 100):
+                # Standard buy with timing confirmation
+                if momentum_surge and price_action_bullish:
+                    should_buy = True
+                    bot_logger.info("BUY with momentum confirmation")
+                else:
+                    should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+            else:
+                should_buy = bullish_pct >= (self.min_confidence_threshold * 100)
+        
+        # Force buy if no trades yet and we have some bullish signals
+        if self.trade_count == 0 and bullish_pct > 0:
+            should_buy = True
+            bot_logger.info("Force first trade - no previous trades")
+        
+        # Apply BTC market weather filter
+        if self.use_btc_weather and btc_weather:
+            if btc_weather['signal'] == 'STRONG_BEARISH':
+                # Don't trade if BTC is strongly bearish
+                should_buy = False
+                bot_logger.warning("BTC strongly bearish - trade blocked")
+            elif btc_weather['signal'] == 'BEARISH':
+                # Reduce position size or confidence if BTC is bearish
+                bullish_pct *= (1 - self.btc_weather_weight)
+                bot_logger.info(f"BTC bearish - reduced bullish confidence to {bullish_pct:.1f}%")
+            elif btc_weather['signal'] == 'STRONG_BULLISH':
+                # Boost confidence if BTC is strongly bullish
+                bullish_pct *= (1 + self.btc_weather_weight)
+                bot_logger.info(f"BTC strongly bullish - boosted confidence to {bullish_pct:.1f}%")
+        
+        # Apply relative strength filter
+        if self.use_relative_strength and relative_strength:
+            if relative_strength['signal'] == 'STRONG_OUTPERFORMING':
+                # Boost confidence if strongly outperforming BTC
+                bullish_pct *= (1 + self.relative_strength_weight)
+                bot_logger.info(f"Strongly outperforming BTC - boosted confidence to {bullish_pct:.1f}%")
+            elif relative_strength['signal'] == 'OUTPERFORMING':
+                # Slightly boost confidence if outperforming BTC
+                bullish_pct *= (1 + self.relative_strength_weight * 0.5)
+                bot_logger.info(f"Outperforming BTC - boosted confidence to {bullish_pct:.1f}%")
+            elif relative_strength['signal'] == 'STRONG_UNDERPERFORMING':
+                # Reduce confidence if strongly underperforming BTC
+                bullish_pct *= (1 - self.relative_strength_weight)
+                bot_logger.info(f"Strongly underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
+            elif relative_strength['signal'] == 'UNDERPERFORMING':
+                # Slightly reduce confidence if underperforming BTC
+                bullish_pct *= (1 - self.relative_strength_weight * 0.5)
+                bot_logger.info(f"Underperforming BTC - reduced confidence to {bullish_pct:.1f}%")
+        
+        # Calculate 100-point setup score
+        setup_score = self.calculate_setup_score(
+            rsi, trend, ema_short, ema_long, macd_bullish, price_near_lower,
+            btc_weather, relative_strength, 0, market_regime  # ml_buy_score not available here
+        )
+        
+        # Apply setup score filter
+        if self.use_setup_score and setup_score < self.min_setup_score:
+            should_buy = False
+            bot_logger.warning(f"Setup score too low: {setup_score} < {self.min_setup_score} - trade blocked")
+        
+        # Apply don't trade engine filters
+        should_block, block_reason = self.should_block_trade(current_price)
+        if should_block:
+            should_buy = False
+            bot_logger.warning(f"Don't trade engine blocked trade: {block_reason}")
+        
+        # Use adaptive confidence threshold
+        adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
+        
+        bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% | Setup Score={setup_score}/100 | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
+        
+        if should_buy:
+            # Calculate trade amount for profitability check
+            base_trade_amount = self.current_capital * (self.capital_percentage / 100)
+            
+            # Calculate target price based on ATR or fixed TP
+            if self.use_atr_tp_sl:
+                dynamic_tp, _ = self.calculate_atr_tp_sl(current_price, market_regime)
+            else:
+                dynamic_tp = self.take_profit_pct
+                
+            target_price = current_price * (1 + dynamic_tp / 100)
+            
+            # Check if trade is profitable after costs
+            if not self.is_trade_profitable(current_price, target_price, base_trade_amount):
+                bot_logger.warning("Trade rejected: Not profitable after trading costs")
+                should_buy = False
+        
+        return should_buy
+    
+    def evaluate_sell_signals(self, profit_pct, current_price, rsi, macd_bearish, ema_short, market_regime, dynamic_tp=None, dynamic_sl=None):
+        """Evaluate sell signals - extracted from main logic for state machine"""
+        should_sell = False
+        reason = ""
+        
+        # Use ATR-based TP/SL if enabled, otherwise use dynamic fixed percentages
+        if self.use_atr_tp_sl:
+            dynamic_tp, dynamic_sl = self.calculate_atr_tp_sl(current_price, market_regime)
+        else:
+            # Dynamic take profit based on market conditions (legacy method)
+            dynamic_tp = self.take_profit_pct
+            if "HIGH_VOL" in market_regime:
+                dynamic_tp *= 1.5  # Higher targets in volatile markets
+            elif "LOW_VOL" in market_regime:
+                dynamic_tp *= 0.8  # Lower targets in calm markets
+            dynamic_sl = self.stop_loss_pct
+        
+        # Take profit with dynamic adjustment
+        if profit_pct >= dynamic_tp - 0.01:  # Larger tolerance for floating point precision
+            should_sell = True
+            reason = f"Take Profit ({dynamic_tp:.2f}%)"
+            bot_logger.info(f"Take profit triggered at {profit_pct:.2f}% (target: {dynamic_tp:.2f}%)")
+        
+        # Improved stop loss with ATR-based adjustment
+        elif profit_pct <= -dynamic_sl:
+            should_sell = True
+            reason = "Stop Loss"
+            bot_logger.info(f"Stop loss triggered at {profit_pct:.2f}%")
+        
+        # Enhanced trailing stop with dynamic adjustment
+        elif self.highest_price_since_buy > self.last_buy_price:
+            trailing_stop_pct = ((self.highest_price_since_buy - current_price) / self.highest_price_since_buy) * 100
+            dynamic_trailing = 0.5 if "HIGH_VOL" in market_regime else 1.0
+            if trailing_stop_pct >= dynamic_trailing and profit_pct > 1.0:
+                should_sell = True
+                reason = f"Trailing Stop ({dynamic_trailing:.1f}%)"
+                bot_logger.info(f"Trailing stop triggered at {trailing_stop_pct:.2f}% with profit {profit_pct:.2f}%")
+        
+        # RSI-based exit for overbought conditions
+        elif rsi > 75 and profit_pct > 0.5:
+            should_sell = True
+            reason = "RSI Overbought"
+            bot_logger.info(f"RSI overbought exit at {rsi:.1f} with profit {profit_pct:.2f}%")
+        
+        # MACD bearish crossover for timing
+        elif macd_bearish and profit_pct > 0.3:
+            should_sell = True
+            reason = "MACD Bearish Crossover"
+            bot_logger.info(f"MACD bearish crossover with profit {profit_pct:.2f}%")
+        
+        # Price below EMA short as exit signal
+        elif current_price < ema_short and profit_pct > 0.5:
+            should_sell = True
+            reason = "Price Below EMA Short"
+            bot_logger.info(f"Price below EMA short with profit {profit_pct:.2f}%")
+        
+        # Force sell after extended hold if not profitable
+        elif len(self.price_history) > 300 and self.current_position == 'long' and profit_pct < 0.2:
+            should_sell = True
+            reason = "Max Hold Time (Low Profit)"
+            bot_logger.info(f"Forcing sell due to max hold time at low profit {profit_pct:.2f}%")
+        
+        return should_sell, reason
