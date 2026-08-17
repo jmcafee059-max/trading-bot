@@ -192,12 +192,26 @@ class SimpleRSIStrategy:
         # ETH-specific strategy parameters
         symbol_normalized = symbol.replace('/', '-').upper()
         self.is_eth_strategy = (symbol_normalized == 'ETH-USDC')
-        bot_logger.info(f"ETH Strategy Detection: Symbol='{symbol}', Normalized='{symbol_normalized}', Is_ETH={self.is_eth_strategy}")
+        self.is_sol_strategy = (symbol_normalized == 'SOL-USDC')
+        bot_logger.info(f"Strategy Detection: Symbol='{symbol}', Normalized='{symbol_normalized}', Is_ETH={self.is_eth_strategy}, Is_SOL={self.is_sol_strategy}")
         self.eth_resistance_levels = [1900, 1922, 1950]  # Key resistance levels for ETH
         self.eth_support_levels = [1862, 1883, 1850]  # Key support levels for ETH
         self.eth_rsi_preferred_zone = (30, 70)  # Preferred RSI zone for ETH longs (widened from 45-65)
         self.eth_rsi_overbought = 70  # Overbought threshold for ETH
         self.eth_min_setup_score = 70  # Minimum score for ETH trades (lowered from 80)
+        
+        # SOL-specific strategy parameters (momentum scalping)
+        self.sol_tp_min = 0.25  # Minimum take profit for SOL
+        self.sol_tp_max = 0.40  # Maximum take profit for SOL
+        self.sol_sl_min = 0.20  # Minimum stop loss for SOL
+        self.sol_sl_max = 0.25  # Maximum stop loss for SOL
+        self.sol_rsi_preferred_zone = (45, 65)  # Preferred RSI zone for SOL
+        self.sol_rsi_overbought = 70  # Overbought threshold for SOL
+        self.sol_min_setup_score = 85  # Minimum score for SOL trades
+        self.sol_min_liquidity = 1000000  # Minimum liquidity for SOL (1M USDC)
+        self.sol_max_spread_pct = 0.05  # Maximum spread percentage for SOL
+        self.sol_resistance_levels = [145, 150, 155]  # Key resistance levels for SOL
+        self.sol_support_levels = [135, 130, 125]  # Key support levels for SOL
         
         # State machine
         self.trading_state = TradingState.IDLE_SCANNING
@@ -1325,6 +1339,120 @@ class SimpleRSIStrategy:
         
         return min(score, 100)  # Cap at 100
     
+    def detect_sol_momentum_setup(self, current_price, ema_short, ema_long, rsi, macd_bullish):
+        """Detect SOL momentum scalping setup"""
+        if not self.is_sol_strategy:
+            return False, "Not SOL strategy"
+        
+        try:
+            reasons = []
+            
+            # EMA trend (1H direction proxy)
+            if ema_short > ema_long:
+                reasons.append("EMA bullish")
+            
+            # RSI in preferred zone
+            if self.sol_rsi_preferred_zone[0] <= rsi <= self.sol_rsi_preferred_zone[1]:
+                reasons.append("RSI in preferred zone")
+            
+            # MACD bullish
+            if macd_bullish:
+                reasons.append("MACD bullish")
+            
+            # Price not overbought
+            if rsi < self.sol_rsi_overbought:
+                reasons.append("Not overbought")
+            
+            if len(reasons) >= 3:
+                return True, ", ".join(reasons)
+            else:
+                return False, f"Insufficient momentum signals: {', '.join(reasons) if reasons else 'none'}"
+        except Exception as e:
+            bot_logger.warning(f"SOL momentum detection failed: {e}")
+            return False, "Detection error"
+    
+    def check_sol_liquidity_and_spread(self, current_price):
+        """Check SOL liquidity and spread for trading"""
+        if not self.is_sol_strategy:
+            return True, "Not SOL strategy"
+        
+        try:
+            # Fetch ticker for liquidity and spread data
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            
+            # Check liquidity (24h volume)
+            volume_24h = ticker.get('quoteVolume', 0)
+            if volume_24h < self.sol_min_liquidity:
+                return False, f"Insufficient liquidity: ${volume_24h:,.0f} < ${self.sol_min_liquidity:,.0f}"
+            
+            # Check spread
+            bid = ticker.get('bid', 0)
+            ask = ticker.get('ask', 0)
+            if bid > 0 and ask > 0:
+                spread_pct = ((ask - bid) / bid) * 100
+                if spread_pct > self.sol_max_spread_pct:
+                    return False, f"Spread too wide: {spread_pct:.3f}% > {self.sol_max_spread_pct:.3f}%"
+            
+            return True, f"Liquidity OK: ${volume_24h:,.0f}, Spread OK"
+        except Exception as e:
+            bot_logger.warning(f"SOL liquidity/spread check failed: {e}")
+            return False, "Check error"
+    
+    def calculate_sol_setup_score(self, rsi, ema_short, ema_long, macd_bullish, price_near_lower, current_price, volume_confirmed, momentum_detected, near_resistance, liquidity_ok):
+        """Calculate SOL-specific setup score (100-point system)"""
+        if not self.is_sol_strategy:
+            return 100
+        
+        score = 0
+        
+        # EMA trend (20 points)
+        if ema_short > ema_long:
+            score += 20
+        
+        # MACD (20 points)
+        if macd_bullish:
+            score += 20
+        
+        # RSI (15 points)
+        if self.sol_rsi_preferred_zone[0] <= rsi <= self.sol_rsi_preferred_zone[1]:
+            score += 15
+        elif rsi < self.sol_rsi_preferred_zone[0]:
+            score += 5  # Oversold but could be bounce
+        else:
+            score += 0  # Too overbought
+        
+        # Volume (15 points)
+        if volume_confirmed:
+            score += 15
+        else:
+            score += 5
+        
+        # Momentum setup (15 points)
+        if momentum_detected:
+            score += 15
+        else:
+            score += 0
+        
+        # Price extension (10 points)
+        if price_near_lower:
+            score += 10
+        else:
+            score += 5
+        
+        # Resistance avoidance (10 points)
+        if not near_resistance:
+            score += 10
+        else:
+            score -= 15  # Penalty for being near resistance
+        
+        # Liquidity and spread (5 points)
+        if liquidity_ok:
+            score += 5
+        else:
+            score -= 10  # Heavy penalty for poor liquidity
+        
+        return min(score, 100)  # Cap at 100
+    
     def detect_breakout(self, current_price, support, resistance):
         """Detect price breakout from support/resistance"""
         try:
@@ -1645,7 +1773,7 @@ class SimpleRSIStrategy:
             self.price_history.pop(0)
         
         # Add volume to history for ETH strategy
-        if self.is_eth_strategy:
+        if self.is_eth_strategy or self.is_sol_strategy:
             # Fetch ticker with volume data
             try:
                 ticker = self.exchange.fetch_ticker(self.symbol)
@@ -2176,6 +2304,56 @@ class SimpleRSIStrategy:
                 bot_logger.warning(f"❌ ETH SETUP TOO LOW ({eth_setup_score} < 80) - Trade rejected")
                 should_buy = False
         
+        # SOL-SPECIFIC STRATEGY (Momentum Scalping)
+        if self.is_sol_strategy:
+            bot_logger.info("🟣 SOL-SPECIFIC STRATEGY ACTIVE (Momentum Scalping)")
+            
+            # Check liquidity and spread
+            liquidity_ok, liquidity_reason = self.check_sol_liquidity_and_spread(current_price)
+            bot_logger.info(f"💧 SOL Liquidity/Spread: {liquidity_reason}")
+            
+            # Detect SOL momentum setup
+            momentum_detected, momentum_reason = self.detect_sol_momentum_setup(current_price, ema_short, ema_long, rsi, macd_bullish)
+            if momentum_detected:
+                bot_logger.info(f"✅ SOL MOMENTUM DETECTED: {momentum_reason}")
+            
+            # Check resistance avoidance
+            near_resistance, resistance_reason = self.check_eth_resistance_avoidance(current_price)  # Reuse ETH method
+            if near_resistance:
+                bot_logger.warning(f"⚠️ SOL RESISTANCE AVOIDANCE: {resistance_reason}")
+            
+            # Get current volume for confirmation
+            current_volume = self.volume_history[-1] if self.volume_history else None
+            volume_confirmed, volume_reason = self.check_volume_confirmation(current_volume)
+            bot_logger.info(f"📊 SOL Volume: {volume_reason}")
+            
+            # Apply liquidity check (hard block)
+            if not liquidity_ok:
+                should_buy = False
+                bot_logger.warning(f"❌ SOL TRADE BLOCKED: {liquidity_reason}")
+            
+            # Calculate SOL-specific setup score
+            sol_setup_score = self.calculate_sol_setup_score(
+                rsi, ema_short, ema_long, macd_bullish, price_near_lower,
+                current_price, volume_confirmed, momentum_detected, near_resistance, liquidity_ok
+            )
+            
+            bot_logger.info(f"🟣 SOL SETUP SCORE: {sol_setup_score}/100 (min: {self.sol_min_setup_score})")
+            
+            # Apply SOL-specific scoring
+            if sol_setup_score >= 90:
+                bot_logger.info("✅ SOL A+ SETUP (90-100) - Trade approved")
+                should_buy = True
+            elif sol_setup_score >= 85:
+                bot_logger.info("✅ SOL STRONG SETUP (85-89) - Trade approved")
+                should_buy = True
+            elif sol_setup_score >= 80:
+                bot_logger.info("⚠️ SOL BORDERLINE SETUP (80-84) - Small position only")
+                should_buy = should_buy  # Keep existing decision
+            else:
+                bot_logger.warning(f"❌ SOL SETUP TOO LOW ({sol_setup_score} < 85) - Trade rejected")
+                should_buy = False
+        
         # Apply BTC market weather filter
         if self.use_btc_weather and btc_weather:
             if btc_weather['signal'] == 'STRONG_BEARISH':
@@ -2270,12 +2448,18 @@ class SimpleRSIStrategy:
             dynamic_tp, dynamic_sl = self.calculate_atr_tp_sl(current_price, market_regime)
         else:
             # Dynamic take profit based on market conditions (legacy method)
-            dynamic_tp = self.take_profit_pct
-            if "HIGH_VOL" in market_regime:
-                dynamic_tp *= 1.5  # Higher targets in volatile markets
-            elif "LOW_VOL" in market_regime:
-                dynamic_tp *= 0.8  # Lower targets in calm markets
-            dynamic_sl = self.stop_loss_pct
+            if self.is_sol_strategy:
+                # SOL-specific momentum scalping parameters
+                dynamic_tp = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
+                dynamic_sl = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
+            else:
+                # Generic parameters
+                dynamic_tp = self.take_profit_pct
+                if "HIGH_VOL" in market_regime:
+                    dynamic_tp *= 1.5  # Higher targets in volatile markets
+                elif "LOW_VOL" in market_regime:
+                    dynamic_tp *= 0.8  # Lower targets in calm markets
+                dynamic_sl = self.stop_loss_pct
         
         # Take profit with dynamic adjustment
         if profit_pct >= dynamic_tp - 0.01:  # Larger tolerance for floating point precision
