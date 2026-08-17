@@ -87,8 +87,11 @@
             <button id="startBotBtn" onclick="toggleBot()" class="card p-6 text-center btn-primary text-2xl font-bold">
                 <i class="fas fa-play mr-3"></i><span id="startBotText">Start Bot</span>
             </button>
-            <button id="manualSellBtn" onclick="manualSell()" class="card p-6 text-center btn-danger text-2xl font-bold hidden">
-                <i class="fas fa-hand-paper mr-3"></i>Manual Sell <span id="manualSellProfit" class="text-xl">(0.00%)</span>
+            <button id="manualSellLongBtn" onclick="manualSellLong()" class="card p-6 text-center btn-danger text-2xl font-bold hidden">
+                <i class="fas fa-arrow-down mr-3"></i>Sell Long <span id="longProfitDisplay" class="text-xl">(0.00%)</span>
+            </button>
+            <button id="manualCoverShortBtn" onclick="manualCoverShort()" class="card p-6 text-center btn-danger text-2xl font-bold hidden">
+                <i class="fas fa-arrow-up mr-3"></i>Cover Short <span id="shortProfitDisplay" class="text-xl">(0.00%)</span>
             </button>
         </div>
 
@@ -152,7 +155,7 @@
             <div class="card p-6">
                 <div class="label mb-2">Current Position</div>
                 <div id="positionValue" class="stat-value text-purple-400">None</div>
-                <div id="streakValue" class="text-lg text-gray-400 mt-2">Streak: 0W/0L</div>
+                <div id="positionDetails" class="text-lg text-gray-400 mt-2">Long: None | Short: None</div>
             </div>
         </div>
 
@@ -344,18 +347,19 @@
         function updateStatusUI() {
             const btn = document.getElementById('startBotBtn');
             const btnText = document.getElementById('startBotText');
-            const manualSellBtn = document.getElementById('manualSellBtn');
+            const manualSellLongBtn = document.getElementById('manualSellLongBtn');
+            const manualCoverShortBtn = document.getElementById('manualCoverShortBtn');
             
             if (botRunning) {
                 btnText.textContent = 'Stop Bot';
                 btn.className = 'card p-6 text-center btn-danger text-2xl font-bold';
                 btn.innerHTML = '<i class="fas fa-stop mr-3"></i><span id="startBotText">Stop Bot</span>';
-                // Don't show manual sell button here - let fetchStatus handle it based on actual position
             } else {
                 btnText.textContent = 'Start Bot';
                 btn.className = 'card p-6 text-center btn-primary text-2xl font-bold';
                 btn.innerHTML = '<i class="fas fa-play mr-3"></i><span id="startBotText">Start Bot</span>';
-                manualSellBtn.classList.add('hidden');
+                manualSellLongBtn.classList.add('hidden');
+                manualCoverShortBtn.classList.add('hidden');
             }
         }
 
@@ -453,20 +457,38 @@
             }
         }
 
-        async function manualSell() {
-            if (confirm('Are you sure you want to manually sell your current position?')) {
+        async function manualSellLong() {
+            if (confirm('Are you sure you want to manually sell your long position?')) {
                 try {
                     const response = await fetch('/api/bot/manual-sell', { method: 'POST' });
                     const data = await response.json();
                     
                     if (data.success) {
-                        alert(`Manual sell executed at $${data.price.toFixed(2)}`);
+                        alert(data.message);
                     } else {
                         alert(data.error || 'Failed to execute manual sell');
                     }
                 } catch (error) {
                     console.error('Error:', error);
                     alert('Failed to execute manual sell');
+                }
+            }
+        }
+
+        async function manualCoverShort() {
+            if (confirm('Are you sure you want to manually cover your short position?')) {
+                try {
+                    const response = await fetch('/api/bot/manual-cover', { method: 'POST' });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        alert(data.message);
+                    } else {
+                        alert(data.error || 'Failed to execute manual cover');
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Failed to execute manual cover');
                 }
             }
         }
@@ -520,12 +542,40 @@
                 
                 document.getElementById('capitalValue').textContent = `$${data.capital.toFixed(2)}`;
                 document.getElementById('tradesValue').textContent = data.trades;
-                document.getElementById('positionValue').textContent = data.position || 'None';
+                
+                // Update position display
+                const positionText = [];
+                if (data.long_position) positionText.push('LONG');
+                if (data.short_position) positionText.push('SHORT');
+                document.getElementById('positionValue').textContent = positionText.length > 0 ? positionText.join(' + ') : 'None';
+                document.getElementById('positionDetails').textContent = `Long: ${data.long_position ? `$${data.long_entry_price?.toFixed(2) || 'N/A'}` : 'None'} | Short: ${data.short_position ? `$${data.short_entry_price?.toFixed(2) || 'N/A'}` : 'None'}`;
+                
                 document.getElementById('winRate').textContent = `Win Rate: ${(data.win_rate * 100).toFixed(1)}%`;
-                document.getElementById('streakValue').textContent = `Streak: ${data.consecutive_wins}W/${data.consecutive_losses}L`;
                 document.getElementById('bestTrade').textContent = `$${data.best_trade.toFixed(2)}`;
                 document.getElementById('worstTrade').textContent = `$${data.worst_trade.toFixed(2)}`;
                 document.getElementById('volatility').textContent = `${data.volatility_multiplier.toFixed(2)}x`;
+                
+                // Show/hide manual sell buttons based on positions
+                const manualSellLongBtn = document.getElementById('manualSellLongBtn');
+                const manualCoverShortBtn = document.getElementById('manualCoverShortBtn');
+                const longProfitDisplay = document.getElementById('longProfitDisplay');
+                const shortProfitDisplay = document.getElementById('shortProfitDisplay');
+                
+                if (data.long_position) {
+                    manualSellLongBtn.classList.remove('hidden');
+                    longProfitDisplay.textContent = `(${data.long_profit_pct >= 0 ? '+' : ''}${data.long_profit_pct.toFixed(2)}%)`;
+                    longProfitDisplay.className = data.long_profit_pct >= 0 ? 'text-green-300' : 'text-red-300';
+                } else {
+                    manualSellLongBtn.classList.add('hidden');
+                }
+                
+                if (data.short_position) {
+                    manualCoverShortBtn.classList.remove('hidden');
+                    shortProfitDisplay.textContent = `(${data.short_profit_pct >= 0 ? '+' : ''}${data.short_profit_pct.toFixed(2)}%)`;
+                    shortProfitDisplay.className = data.short_profit_pct >= 0 ? 'text-green-300' : 'text-red-300';
+                } else {
+                    manualCoverShortBtn.classList.add('hidden');
+                }
                 
                 // Update AI status
                 if (data.ml_enabled) {
@@ -552,17 +602,6 @@
                     document.getElementById('lastSignal').textContent = data.last_ai_signal;
                     document.getElementById('lastSignal').className = `text-xl font-bold ${data.last_ai_signal.includes('BUY') ? 'text-green-400' : data.last_ai_signal.includes('SELL') ? 'text-red-400' : 'text-yellow-400'}`;
                     document.getElementById('signalDetails').textContent = data.last_ai_confidence ? `Confidence: ${data.last_ai_confidence}/10` : 'No recent signal';
-                }
-                
-                // Show/hide manual sell button based on position
-                const manualSellBtn = document.getElementById('manualSellBtn');
-                const manualSellProfit = document.getElementById('manualSellProfit');
-                if (data.position === 'long') {
-                    manualSellBtn.classList.remove('hidden');
-                    manualSellProfit.textContent = `(${data.current_position_profit_pct >= 0 ? '+' : ''}${data.current_position_profit_pct.toFixed(2)}%)`;
-                    manualSellProfit.className = data.current_position_profit_pct >= 0 ? 'text-green-300' : 'text-red-300';
-                } else {
-                    manualSellBtn.classList.add('hidden');
                 }
                 
                 const profitLoss = data.profit_loss;
