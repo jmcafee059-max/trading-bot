@@ -231,7 +231,7 @@ class SimpleRSIStrategy:
         self.sol_rsi_preferred_zone = (45, 65)  # Preferred RSI zone for SOL
         self.sol_rsi_overbought = 70  # Overbought threshold for SOL
         self.sol_rsi_oversold = 30  # Oversold threshold for SOL
-        self.sol_min_setup_score = 65  # Minimum score for SOL trades (lowered from 85 for more opportunities)
+        self.sol_min_setup_score = 25  # Minimum score for SOL trades (25% for frequent opportunities)
         self.sol_min_liquidity = 1000000  # Minimum liquidity for SOL (1M USDC)
         self.sol_max_spread_pct = 0.05  # Maximum spread percentage for SOL
         self.sol_resistance_levels = [145, 150, 155]  # Key resistance levels for SOL
@@ -243,7 +243,7 @@ class SimpleRSIStrategy:
         self.sol_short_sl_min = 0.20  # Minimum stop loss for SOL shorts
         self.sol_short_sl_max = 0.25  # Maximum stop loss for SOL shorts
         self.sol_short_rsi_preferred_zone = (30, 55)  # Preferred RSI zone for SOL shorts (oversold to neutral)
-        self.sol_short_min_setup_score = 65  # Minimum score for SOL short trades
+        self.sol_short_min_setup_score = 25  # Minimum score for SOL short trades (25% for frequent opportunities)
         
         # State machine
         self.trading_state = TradingState.IDLE_SCANNING
