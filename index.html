@@ -87,11 +87,11 @@
             <button id="startBotBtn" onclick="toggleBot()" class="card p-6 text-center btn-primary text-2xl font-bold">
                 <i class="fas fa-play mr-3"></i><span id="startBotText">Start Bot</span>
             </button>
-            <button id="manualSellLongBtn" onclick="manualSellLong()" class="card p-6 text-center btn-danger text-2xl font-bold hidden">
-                <i class="fas fa-arrow-down mr-3"></i>Sell Long <span id="longProfitDisplay" class="text-xl">(0.00%)</span>
+            <button id="manualSellLongBtn" onclick="manualSellLong()" class="card p-6 text-center btn-danger text-2xl font-bold disabled" disabled>
+                <i class="fas fa-arrow-down mr-3"></i>Sell Long <span id="longProfitDisplay" class="text-xl">(No Position)</span>
             </button>
-            <button id="manualCoverShortBtn" onclick="manualCoverShort()" class="card p-6 text-center btn-danger text-2xl font-bold hidden">
-                <i class="fas fa-arrow-up mr-3"></i>Cover Short <span id="shortProfitDisplay" class="text-xl">(0.00%)</span>
+            <button id="manualCoverShortBtn" onclick="manualCoverShort()" class="card p-6 text-center btn-danger text-2xl font-bold disabled" disabled>
+                <i class="fas fa-arrow-up mr-3"></i>Cover Short <span id="shortProfitDisplay" class="text-xl">(No Position)</span>
             </button>
         </div>
 
@@ -358,8 +358,10 @@
                 btnText.textContent = 'Start Bot';
                 btn.className = 'card p-6 text-center btn-primary text-2xl font-bold';
                 btn.innerHTML = '<i class="fas fa-play mr-3"></i><span id="startBotText">Start Bot</span>';
-                manualSellLongBtn.classList.add('hidden');
-                manualCoverShortBtn.classList.add('hidden');
+                manualSellLongBtn.disabled = true;
+                manualSellLongBtn.classList.add('disabled');
+                manualCoverShortBtn.disabled = true;
+                manualCoverShortBtn.classList.add('disabled');
             }
         }
 
@@ -555,26 +557,34 @@
                 document.getElementById('worstTrade').textContent = `$${data.worst_trade.toFixed(2)}`;
                 document.getElementById('volatility').textContent = `${data.volatility_multiplier.toFixed(2)}x`;
                 
-                // Show/hide manual sell buttons based on positions
+                // Enable/disable manual sell buttons based on positions
                 const manualSellLongBtn = document.getElementById('manualSellLongBtn');
                 const manualCoverShortBtn = document.getElementById('manualCoverShortBtn');
                 const longProfitDisplay = document.getElementById('longProfitDisplay');
                 const shortProfitDisplay = document.getElementById('shortProfitDisplay');
                 
                 if (data.long_position) {
-                    manualSellLongBtn.classList.remove('hidden');
+                    manualSellLongBtn.disabled = false;
+                    manualSellLongBtn.classList.remove('disabled');
                     longProfitDisplay.textContent = `(${data.long_profit_pct >= 0 ? '+' : ''}${data.long_profit_pct.toFixed(2)}%)`;
                     longProfitDisplay.className = data.long_profit_pct >= 0 ? 'text-green-300' : 'text-red-300';
                 } else {
-                    manualSellLongBtn.classList.add('hidden');
+                    manualSellLongBtn.disabled = true;
+                    manualSellLongBtn.classList.add('disabled');
+                    longProfitDisplay.textContent = '(No Position)';
+                    longProfitDisplay.className = 'text-xl';
                 }
                 
                 if (data.short_position) {
-                    manualCoverShortBtn.classList.remove('hidden');
+                    manualCoverShortBtn.disabled = false;
+                    manualCoverShortBtn.classList.remove('disabled');
                     shortProfitDisplay.textContent = `(${data.short_profit_pct >= 0 ? '+' : ''}${data.short_profit_pct.toFixed(2)}%)`;
                     shortProfitDisplay.className = data.short_profit_pct >= 0 ? 'text-green-300' : 'text-red-300';
                 } else {
-                    manualCoverShortBtn.classList.add('hidden');
+                    manualCoverShortBtn.disabled = true;
+                    manualCoverShortBtn.classList.add('disabled');
+                    shortProfitDisplay.textContent = '(No Position)';
+                    shortProfitDisplay.className = 'text-xl';
                 }
                 
                 // Update AI status
