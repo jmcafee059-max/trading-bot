@@ -190,7 +190,9 @@ class SimpleRSIStrategy:
         self.worst_trade_loss = 0.0
         
         # ETH-specific strategy parameters
-        self.is_eth_strategy = (symbol in ['ETH/USDC', 'ETH-USDC'])
+        symbol_normalized = symbol.replace('/', '-').upper()
+        self.is_eth_strategy = (symbol_normalized == 'ETH-USDC')
+        bot_logger.info(f"ETH Strategy Detection: Symbol='{symbol}', Normalized='{symbol_normalized}', Is_ETH={self.is_eth_strategy}")
         self.eth_resistance_levels = [1900, 1922, 1950]  # Key resistance levels for ETH
         self.eth_support_levels = [1862, 1883, 1850]  # Key support levels for ETH
         self.eth_rsi_preferred_zone = (45, 65)  # Preferred RSI zone for ETH longs
