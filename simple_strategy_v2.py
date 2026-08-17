@@ -177,17 +177,23 @@ class SimpleRSIStrategy:
             self.currency_symbol = 'USD'  # fallback
         self.price_history = []
         self.volume_history = []  # Track volume for ETH strategy
-        self.current_position = None
+        self.current_position = None  # Can be 'long', 'short', or None
         self.trade_count = 0
         self.profit_loss = 0.0
         self.last_buy_price = None
+        self.last_short_price = None  # Track short entry price
         self.position_size = 0.0
         self.consecutive_losses = 0
         self.consecutive_wins = 0
         self.highest_price_since_buy = None
+        self.lowest_price_since_short = None  # Track lowest price for short trailing stops
         self.trade_history = []
         self.best_trade_profit = 0.0
         self.worst_trade_loss = 0.0
+        
+        # Short trading configuration
+        self.enable_short_trading = config.get('enable_short_trading', False)
+        bot_logger.info(f"Short trading enabled: {self.enable_short_trading}")
         
         # ETH-specific strategy parameters
         symbol_normalized = symbol.replace('/', '-').upper()
@@ -207,11 +213,20 @@ class SimpleRSIStrategy:
         self.sol_sl_max = 0.25  # Maximum stop loss for SOL
         self.sol_rsi_preferred_zone = (45, 65)  # Preferred RSI zone for SOL
         self.sol_rsi_overbought = 70  # Overbought threshold for SOL
+        self.sol_rsi_oversold = 30  # Oversold threshold for SOL
         self.sol_min_setup_score = 65  # Minimum score for SOL trades (lowered from 85 for more opportunities)
         self.sol_min_liquidity = 1000000  # Minimum liquidity for SOL (1M USDC)
         self.sol_max_spread_pct = 0.05  # Maximum spread percentage for SOL
         self.sol_resistance_levels = [145, 150, 155]  # Key resistance levels for SOL
         self.sol_support_levels = [135, 130, 125]  # Key support levels for SOL
+        
+        # SOL short-specific parameters
+        self.sol_short_tp_min = 0.25  # Minimum take profit for SOL shorts
+        self.sol_short_tp_max = 0.40  # Maximum take profit for SOL shorts
+        self.sol_short_sl_min = 0.20  # Minimum stop loss for SOL shorts
+        self.sol_short_sl_max = 0.25  # Maximum stop loss for SOL shorts
+        self.sol_short_rsi_preferred_zone = (30, 55)  # Preferred RSI zone for SOL shorts (oversold to neutral)
+        self.sol_short_min_setup_score = 65  # Minimum score for SOL short trades
         
         # State machine
         self.trading_state = TradingState.IDLE_SCANNING
@@ -1453,6 +1468,97 @@ class SimpleRSIStrategy:
         
         return min(score, 100)  # Cap at 100
     
+    def detect_sol_short_setup(self, current_price, ema_short, ema_long, rsi, macd_bearish):
+        """Detect SOL short momentum setup"""
+        if not self.is_sol_strategy or not self.enable_short_trading:
+            return False, "Not SOL strategy or short trading disabled"
+        
+        try:
+            reasons = []
+            
+            # EMA trend (bearish for short)
+            if ema_short < ema_long:
+                reasons.append("EMA bearish")
+            
+            # RSI in preferred short zone (oversold to neutral)
+            if self.sol_short_rsi_preferred_zone[0] <= rsi <= self.sol_short_rsi_preferred_zone[1]:
+                reasons.append("RSI in short preferred zone")
+            elif rsi > self.sol_rsi_overbought:
+                reasons.append("RSI overbought - good for short")
+            
+            # MACD bearish
+            if macd_bearish:
+                reasons.append("MACD bearish")
+            
+            # Price not oversold
+            if rsi > self.sol_rsi_oversold:
+                reasons.append("Not oversold")
+            
+            if len(reasons) >= 3:
+                return True, ", ".join(reasons)
+            else:
+                return False, f"Insufficient short signals: {', '.join(reasons) if reasons else 'none'}"
+        except Exception as e:
+            bot_logger.warning(f"SOL short detection failed: {e}")
+            return False, "Detection error"
+    
+    def calculate_sol_short_setup_score(self, rsi, ema_short, ema_long, macd_bearish, price_near_upper, current_price, volume_confirmed, short_momentum_detected, near_support, liquidity_ok):
+        """Calculate SOL-specific short setup score (100-point system)"""
+        if not self.is_sol_strategy:
+            return 100
+        
+        score = 0
+        
+        # EMA trend (20 points) - bearish for short
+        if ema_short < ema_long:
+            score += 20
+        
+        # MACD (20 points) - bearish for short
+        if macd_bearish:
+            score += 20
+        
+        # RSI (15 points) - prefer overbought or neutral for shorts
+        if rsi > self.sol_rsi_overbought:
+            score += 15  # Overbought is great for shorts
+        elif self.sol_short_rsi_preferred_zone[0] <= rsi <= self.sol_short_rsi_preferred_zone[1]:
+            score += 10  # Neutral zone
+        elif rsi < self.sol_rsi_oversold:
+            score += 0  # Too oversold
+        else:
+            score += 5
+        
+        # Volume (15 points)
+        if volume_confirmed:
+            score += 15
+        else:
+            score += 5
+        
+        # Short momentum setup (15 points)
+        if short_momentum_detected:
+            score += 15
+        else:
+            score += 0
+        
+        # Price extension (10 points) - prefer near resistance for shorts
+        if price_near_upper:
+            score += 10
+        else:
+            score += 5
+        
+        # Support avoidance (10 points) - avoid being too close to support
+        if not near_support:
+            score += 10
+        else:
+            score -= 15  # Penalty for being near support
+        
+        # Liquidity and spread (5 points)
+        if liquidity_ok:
+            score += 5
+        else:
+            score -= 10  # Heavy penalty for poor liquidity
+        
+        return min(score, 100)  # Cap at 100
+    
     def detect_breakout(self, current_price, support, resistance):
         """Detect price breakout from support/resistance"""
         try:
@@ -1573,8 +1679,74 @@ class SimpleRSIStrategy:
         
         return position_size
     
+    def place_short_order(self, current_price):
+        """Place short order (sell borrowed asset)"""
+        if not self.enable_short_trading:
+            bot_logger.warning("Short trading is disabled - cannot place short order")
+            return 0
+        
+        position_size = self.calculate_position_size(current_price)
+        trade_value = position_size * current_price
+        
+        # Check minimum order size
+        MIN_ORDER_SIZE = 2.0  # $2 minimum order size
+        if trade_value < MIN_ORDER_SIZE:
+            bot_logger.warning(f"Order size ${trade_value:.2f} below minimum ${MIN_ORDER_SIZE:.2f}")
+            return 0
+        
+        order_successful = False
+        order_id = None
+        
+        # Execute real short order (sell borrowed asset)
+        try:
+            # For shorting, we sell the base currency
+            self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
+            
+            # Check if we have enough balance to short
+            balance = self.exchange.fetch_balance()
+            base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+            base_balance = balance.get(base_currency, {}).get('free', 0)
+            
+            if base_balance < position_size:
+                bot_logger.warning(f"Insufficient {base_currency} balance for short. Have: {base_balance:.6f}, Need: {position_size:.6f}")
+                # For paper trading, proceed anyway
+                order_successful = False
+            else:
+                order = self.exchange.create_market_sell_order(
+                    self.symbol,
+                    position_size
+                )
+                order_id = order.get('id', 'N/A')
+                bot_logger.info(f"[REAL SHORT ORDER PLACED] Order ID: {order_id}")
+                
+                # Verify order
+                if order_id and order_id != 'N/A':
+                    time.sleep(2)
+                    try:
+                        order_status = self.exchange.fetch_order(order_id, self.symbol)
+                        if order_status.get('status') == 'closed':
+                            order_successful = True
+                            bot_logger.info(f"Short order verified - sold {position_size:.6f} {base_currency}")
+                    except Exception as e:
+                        bot_logger.error(f"Error verifying short order: {e}")
+                        order_successful = False
+        except Exception as e:
+            bot_logger.error(f"Failed to place real short order: {e}")
+            order_successful = False
+        
+        # Set short position
+        self.current_position = 'short'
+        self.last_short_price = current_price
+        self.position_size = position_size
+        self.lowest_price_since_short = current_price
+        self.partial_tps_taken = []
+        
+        bot_logger.info(f"[SHORT #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Real: {order_successful}")
+        
+        return position_size
+    
     def place_sell_order(self, current_price, reason):
-        """Place sell order"""
+        """Place sell order (close long position)"""
         if self.current_position != 'long' or self.last_buy_price is None:
             return
         
@@ -1654,6 +1826,100 @@ class SimpleRSIStrategy:
         self.last_buy_price = None
         self.position_size = 0.0
         self.highest_price_since_buy = None
+        
+        # Save state
+        self.save_capital_state()
+        
+        return profit_amount
+    
+    def place_cover_order(self, current_price, reason):
+        """Place cover order (close short position by buying back)"""
+        if self.current_position != 'short' or self.last_short_price is None:
+            return
+        
+        # Extract base currency from symbol
+        base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+        
+        # Check if we have enough USDC to cover
+        try:
+            balance = self.exchange.fetch_balance()
+            usdc_balance = balance.get('USDC', {}).get('free', 0)
+            trade_value = self.position_size * current_price
+            
+            bot_logger.info(f"USDC balance: ${usdc_balance:.2f}, Needed to cover: ${trade_value:.2f}")
+            
+            if usdc_balance < trade_value:
+                bot_logger.warning(f"Insufficient USDC to cover short. Have: ${usdc_balance:.2f}, Need: ${trade_value:.2f}")
+                # For paper trading, proceed anyway
+                order_successful = False
+            else:
+                # Execute real cover order (buy back the asset)
+                self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
+                order = self.exchange.create_market_buy_order(
+                    self.symbol,
+                    trade_value  # pass cost directly
+                )
+                order_id = order.get('id', 'N/A')
+                bot_logger.info(f"[REAL COVER ORDER PLACED] Order ID: {order_id}")
+                
+                # Verify order
+                if order_id and order_id != 'N/A':
+                    time.sleep(2)
+                    try:
+                        order_status = self.exchange.fetch_order(order_id, self.symbol)
+                        if order_status.get('status') == 'closed':
+                            order_successful = True
+                            bot_logger.info(f"Cover order verified - bought back {self.position_size:.6f} {base_currency}")
+                    except Exception as e:
+                        bot_logger.error(f"Error verifying cover order: {e}")
+                        order_successful = False
+        except Exception as e:
+            bot_logger.error(f"Failed to place real cover order: {e}")
+            order_successful = False
+        
+        # Calculate profit/loss for short (profit when price goes down)
+        profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
+        profit_amount = (self.last_short_price - current_price) * self.position_size
+        
+        # Update statistics
+        self.trade_count += 1
+        self.profit_loss += profit_amount
+        self.current_capital += profit_amount
+        
+        if profit_amount > 0:
+            self.consecutive_wins += 1
+            self.consecutive_losses = 0
+            if profit_amount > self.best_trade_profit:
+                self.best_trade_profit = profit_amount
+            bot_logger.info(f"[SHORT WIN #{self.trade_count}] Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Consecutive Wins: {self.consecutive_wins} | Capital: ${self.current_capital:.2f}")
+        else:
+            self.consecutive_losses += 1
+            self.consecutive_wins = 0
+            self.last_loss_time = time.time()
+            if profit_amount < self.worst_trade_loss:
+                self.worst_trade_loss = profit_amount
+            bot_logger.info(f"[SHORT LOSS #{self.trade_count}] Loss: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Consecutive Losses: {self.consecutive_losses} | Capital: ${self.current_capital:.2f}")
+        
+        # Record trade
+        trade_record = {
+            'trade_number': self.trade_count,
+            'type': 'short',
+            'entry_price': self.last_short_price,
+            'exit_price': current_price,
+            'position_size': self.position_size,
+            'profit': profit_amount,
+            'profit_pct': profit_pct,
+            'reason': reason
+        }
+        self.trade_history.append(trade_record)
+        
+        bot_logger.info(f"[COVER #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} | Capital: ${self.current_capital:.2f}")
+        
+        # Reset position
+        self.current_position = None
+        self.last_short_price = None
+        self.position_size = 0.0
+        self.lowest_price_since_short = None
         
         # Save state
         self.save_capital_state()
@@ -1877,11 +2143,18 @@ class SimpleRSIStrategy:
                 bot_logger.info(f"Stale signal prevention - last entry was {current_time - self.last_entry_signal_time:.1f}s ago (min 30s)")
                 return
             
-            # Evaluate buy signals (existing logic)
+            # Evaluate buy signals (existing logic for longs)
             should_buy = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish, 
                                                    momentum_positive, price_near_lower, rsi_divergence, 
                                                    bullish_breakout, engulfing_pattern, pin_bar, market_regime,
                                                    btc_weather, relative_strength, current_price)
+            
+            # Evaluate short signals (if enabled)
+            should_short = False
+            if self.enable_short_trading:
+                # Reuse evaluate_buy_signals but with inverted logic for shorts
+                # For now, we'll use the should_short flag set in evaluate_buy_signals
+                pass
             
             if should_buy:
                 self.last_entry_signal_time = time.time()
@@ -1891,20 +2164,40 @@ class SimpleRSIStrategy:
                     self.transition_state(TradingState.MONITOR_POSITION, "Position opened successfully")
                 else:
                     self.transition_state(TradingState.IDLE_SCANNING, "Position open failed - return to scanning")
+            elif should_short:
+                self.last_entry_signal_time = time.time()
+                self.transition_state(TradingState.OPEN_POSITION, "Short entry signal confirmed")
+                self.place_short_order(current_price)
+                if self.current_position == 'short':
+                    self.transition_state(TradingState.MONITOR_POSITION, "Short position opened successfully")
+                else:
+                    self.transition_state(TradingState.IDLE_SCANNING, "Short position open failed - return to scanning")
             else:
                 bot_logger.info("No valid entry signal - continue scanning")
         
         elif self.trading_state == TradingState.MONITOR_POSITION:
-            if self.current_position != 'long':
+            if self.current_position is None:
                 # Position was closed externally, transition to reset
                 self.transition_state(TradingState.POSITION_CLOSED, "Position closed externally")
                 return
             
-            # Update highest price for trailing stop
-            if current_price > self.highest_price_since_buy:
-                self.highest_price_since_buy = current_price
+            # Update highest price for trailing stop (long positions)
+            if self.current_position == 'long':
+                if self.highest_price_since_buy is None or current_price > self.highest_price_since_buy:
+                    self.highest_price_since_buy = current_price
             
-            profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+            # Update lowest price for trailing stop (short positions)
+            elif self.current_position == 'short':
+                if self.lowest_price_since_short is None or current_price < self.lowest_price_since_short:
+                    self.lowest_price_since_short = current_price
+            
+            # Calculate profit percentage based on position type
+            if self.current_position == 'long':
+                profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+            elif self.current_position == 'short':
+                profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
+            else:
+                profit_pct = 0
             
             # Debug logging for sell logic
             bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
@@ -1920,7 +2213,11 @@ class SimpleRSIStrategy:
             
             if should_sell:
                 self.transition_state(TradingState.POSITION_CLOSED, f"Exit signal: {reason}")
-                self.place_sell_order(current_price, reason)
+                # Use appropriate exit method based on position type
+                if self.current_position == 'long':
+                    self.place_sell_order(current_price, reason)
+                elif self.current_position == 'short':
+                    self.place_cover_order(current_price, reason)
                 if self.current_position is None:
                     self.transition_state(TradingState.RESET_STATE, "Position closed successfully")
         
@@ -1935,8 +2232,10 @@ class SimpleRSIStrategy:
             # Reset all trade-specific variables
             self.current_position = None
             self.last_buy_price = None
+            self.last_short_price = None
             self.position_size = 0.0
             self.highest_price_since_buy = None
+            self.lowest_price_since_short = None
             self.partial_tps_taken = []
             
             bot_logger.info(f"Trade reset complete | Capital: ${self.current_capital:.2f} | Trades: {self.trade_count}")
@@ -2312,7 +2611,7 @@ class SimpleRSIStrategy:
             liquidity_ok, liquidity_reason = self.check_sol_liquidity_and_spread(current_price)
             bot_logger.info(f"💧 SOL Liquidity/Spread: {liquidity_reason}")
             
-            # Detect SOL momentum setup
+            # Detect SOL momentum setup (for longs)
             momentum_detected, momentum_reason = self.detect_sol_momentum_setup(current_price, ema_short, ema_long, rsi, macd_bullish)
             if momentum_detected:
                 bot_logger.info(f"✅ SOL MOMENTUM DETECTED: {momentum_reason}")
@@ -2332,27 +2631,65 @@ class SimpleRSIStrategy:
                 should_buy = False
                 bot_logger.warning(f"❌ SOL TRADE BLOCKED: {liquidity_reason}")
             
-            # Calculate SOL-specific setup score
+            # Calculate SOL-specific setup score (for longs)
             sol_setup_score = self.calculate_sol_setup_score(
                 rsi, ema_short, ema_long, macd_bullish, price_near_lower,
                 current_price, volume_confirmed, momentum_detected, near_resistance, liquidity_ok
             )
             
-            bot_logger.info(f"🟣 SOL SETUP SCORE: {sol_setup_score}/100 (min: {self.sol_min_setup_score})")
+            bot_logger.info(f"🟣 SOL LONG SETUP SCORE: {sol_setup_score}/100 (min: {self.sol_min_setup_score})")
             
-            # Apply SOL-specific scoring
+            # Apply SOL-specific scoring (for longs)
             if sol_setup_score >= 90:
-                bot_logger.info("✅ SOL A+ SETUP (90-100) - Trade approved")
+                bot_logger.info("✅ SOL A+ LONG SETUP (90-100) - Trade approved")
                 should_buy = True
             elif sol_setup_score >= 85:
-                bot_logger.info("✅ SOL STRONG SETUP (85-89) - Trade approved")
+                bot_logger.info("✅ SOL STRONG LONG SETUP (85-89) - Trade approved")
                 should_buy = True
             elif sol_setup_score >= 80:
-                bot_logger.info("⚠️ SOL BORDERLINE SETUP (80-84) - Small position only")
+                bot_logger.info("⚠️ SOL BORDERLINE LONG SETUP (80-84) - Small position only")
                 should_buy = should_buy  # Keep existing decision
             else:
-                bot_logger.warning(f"❌ SOL SETUP TOO LOW ({sol_setup_score} < 85) - Trade rejected")
+                bot_logger.warning(f"❌ SOL LONG SETUP TOO LOW ({sol_setup_score} < 85) - Trade rejected")
                 should_buy = False
+        
+        # SOL SHORT STRATEGY (if enabled)
+        if self.is_sol_strategy and self.enable_short_trading:
+            bot_logger.info("🟣 SOL SHORT STRATEGY ACTIVE")
+            
+            # Detect SOL short setup
+            short_momentum_detected, short_momentum_reason = self.detect_sol_short_setup(current_price, ema_short, ema_long, rsi, not macd_bullish)
+            if short_momentum_detected:
+                bot_logger.info(f"✅ SOL SHORT MOMENTUM DETECTED: {short_momentum_reason}")
+            
+            # Check support avoidance (avoid being too close to support when shorting)
+            near_support, support_reason = self.check_eth_resistance_avoidance(current_price)  # Reuse method for support
+            if near_support:
+                bot_logger.warning(f"⚠️ SOL SUPPORT AVOIDANCE: {support_reason}")
+            
+            # Calculate SOL short setup score
+            sol_short_setup_score = self.calculate_sol_short_setup_score(
+                rsi, ema_short, ema_long, not macd_bullish, price_near_upper,
+                current_price, volume_confirmed, short_momentum_detected, near_support, liquidity_ok
+            )
+            
+            bot_logger.info(f"🟣 SOL SHORT SETUP SCORE: {sol_short_setup_score}/100 (min: {self.sol_short_min_setup_score})")
+            
+            # Apply SOL short scoring
+            if sol_short_setup_score >= 90:
+                bot_logger.info("✅ SOL A+ SHORT SETUP (90-100) - Short approved")
+                should_short = True
+            elif sol_short_setup_score >= 85:
+                bot_logger.info("✅ SOL STRONG SHORT SETUP (85-89) - Short approved")
+                should_short = True
+            elif sol_short_setup_score >= 80:
+                bot_logger.info("⚠️ SOL BORDERLINE SHORT SETUP (80-84) - Small position only")
+                should_short = True
+            else:
+                bot_logger.warning(f"❌ SOL SHORT SETUP TOO LOW ({sol_short_setup_score} < 85) - Short rejected")
+                should_short = False
+        else:
+            should_short = False
         
         # Apply BTC market weather filter
         if self.use_btc_weather and btc_weather:
@@ -2449,9 +2786,14 @@ class SimpleRSIStrategy:
         else:
             # Dynamic take profit based on market conditions (legacy method)
             if self.is_sol_strategy:
-                # SOL-specific momentum scalping parameters
-                dynamic_tp = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
-                dynamic_sl = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
+                if self.current_position == 'short':
+                    # SOL-specific short parameters
+                    dynamic_tp = (self.sol_short_tp_min + self.sol_short_tp_max) / 2  # Average 0.325%
+                    dynamic_sl = (self.sol_short_sl_min + self.sol_short_sl_max) / 2  # Average 0.225%
+                else:
+                    # SOL-specific long parameters
+                    dynamic_tp = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
+                    dynamic_sl = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
             else:
                 # Generic parameters
                 dynamic_tp = self.take_profit_pct
