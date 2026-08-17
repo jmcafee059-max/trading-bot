@@ -1415,7 +1415,9 @@ class SimpleRSIStrategy:
             # Check liquidity (24h volume)
             volume_24h = ticker.get('quoteVolume', 0)
             if volume_24h is None or volume_24h == 0:
-                return False, "Volume data unavailable"
+                # Allow trading if volume data unavailable (fallback to other checks)
+                bot_logger.warning("Volume data unavailable - proceeding with caution")
+                return True, "Volume data unavailable - proceeding"
             if volume_24h < self.sol_min_liquidity:
                 return False, f"Insufficient liquidity: ${volume_24h:,.0f} < ${self.sol_min_liquidity:,.0f}"
             
@@ -2749,8 +2751,11 @@ class SimpleRSIStrategy:
             elif sol_setup_score >= 80:
                 bot_logger.info("⚠️ SOL BORDERLINE LONG SETUP (80-84) - Small position only")
                 should_buy = should_buy  # Keep existing decision
+            elif sol_setup_score >= self.sol_min_setup_score:
+                bot_logger.info(f"✅ SOL LONG SETUP MEETS THRESHOLD ({sol_setup_score} >= {self.sol_min_setup_score}) - Trade approved")
+                should_buy = True
             else:
-                bot_logger.warning(f"❌ SOL LONG SETUP TOO LOW ({sol_setup_score} < 85) - Trade rejected")
+                bot_logger.warning(f"❌ SOL LONG SETUP TOO LOW ({sol_setup_score} < {self.sol_min_setup_score}) - Trade rejected")
                 should_buy = False
         
         # SOL SHORT STRATEGY (if enabled)
@@ -2785,8 +2790,11 @@ class SimpleRSIStrategy:
             elif sol_short_setup_score >= 80:
                 bot_logger.info("⚠️ SOL BORDERLINE SHORT SETUP (80-84) - Small position only")
                 should_short = True
+            elif sol_short_setup_score >= self.sol_short_min_setup_score:
+                bot_logger.info(f"✅ SOL SHORT SETUP MEETS THRESHOLD ({sol_short_setup_score} >= {self.sol_short_min_setup_score}) - Short approved")
+                should_short = True
             else:
-                bot_logger.warning(f"❌ SOL SHORT SETUP TOO LOW ({sol_short_setup_score} < 85) - Short rejected")
+                bot_logger.warning(f"❌ SOL SHORT SETUP TOO LOW ({sol_short_setup_score} < {self.sol_short_min_setup_score}) - Short rejected")
                 should_short = False
         else:
             should_short = False
