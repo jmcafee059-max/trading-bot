@@ -91,6 +91,7 @@ bot_config = {
     'atr_tp_multiplier_high': float(os.getenv('ATR_TP_MULTIPLIER_HIGH', '2.5')),
     'atr_sl_multiplier': float(os.getenv('ATR_SL_MULTIPLIER', '1.2')),
     'atr_period': int(os.getenv('ATR_PERIOD', '14')),
+    'enable_short_trading': os.getenv('ENABLE_SHORT_TRADING', 'false').lower() == 'true',
     'max_runtime_hours': int(os.getenv('MAX_RUNTIME_HOURS', '24')),
 }
 
@@ -293,17 +294,28 @@ def bot_status():
     if strategy_instance.trade_history:
         win_rate = len([t for t in strategy_instance.trade_history if t['profit'] > 0]) / len(strategy_instance.trade_history)
     
-    # Calculate current position profit percentage
-    current_position_profit_pct = 0.0
-    if strategy_instance.current_position == 'long' and strategy_instance.last_buy_price and strategy_instance.price_history:
+    # Calculate current position profit percentage for both positions
+    long_profit_pct = 0.0
+    short_profit_pct = 0.0
+    
+    if strategy_instance.long_position and strategy_instance.last_buy_price and strategy_instance.price_history:
         current_price = strategy_instance.price_history[-1]
-        current_position_profit_pct = ((current_price - strategy_instance.last_buy_price) / strategy_instance.last_buy_price) * 100
+        long_profit_pct = ((current_price - strategy_instance.last_buy_price) / strategy_instance.last_buy_price) * 100
+    
+    if strategy_instance.short_position and strategy_instance.last_short_price and strategy_instance.price_history:
+        current_price = strategy_instance.price_history[-1]
+        short_profit_pct = ((strategy_instance.last_short_price - current_price) / strategy_instance.last_short_price) * 100
     
     return jsonify({
         'running': bot_running,
         'capital': strategy_instance.current_capital,
         'trades': strategy_instance.trade_count,
-        'position': strategy_instance.current_position,
+        'long_position': strategy_instance.long_position,
+        'short_position': strategy_instance.short_position,
+        'long_entry_price': strategy_instance.last_buy_price,
+        'short_entry_price': strategy_instance.last_short_price,
+        'long_position_size': strategy_instance.long_position_size,
+        'short_position_size': strategy_instance.short_position_size,
         'profit_loss': strategy_instance.profit_loss,
         'win_rate': win_rate,
         'consecutive_wins': strategy_instance.consecutive_wins,
@@ -311,12 +323,14 @@ def bot_status():
         'best_trade': strategy_instance.best_trade_profit,
         'worst_trade': strategy_instance.worst_trade_loss,
         'volatility_multiplier': strategy_instance.VOLATILITY_MULTIPLIER,
-        'current_position_profit_pct': current_position_profit_pct,
+        'long_profit_pct': long_profit_pct,
+        'short_profit_pct': short_profit_pct,
         'ml_enabled': strategy_instance.ml_enabled,
         'ml_only': strategy_instance.ml_only,
         'openai_enabled': strategy_instance.openai_enabled,
         'last_ai_signal': getattr(strategy_instance, 'last_ai_signal', None),
         'last_ai_confidence': getattr(strategy_instance, 'last_ai_confidence', None),
+        'enable_short_trading': strategy_instance.enable_short_trading,
     })
 
 @app.route('/api/bot/trades', methods=['GET'])
@@ -345,18 +359,36 @@ def manual_sell():
     if not strategy_instance:
         return jsonify({'error': 'Bot not initialized'}), 400
     
-    if strategy_instance.current_position != 'long':
-        return jsonify({'error': 'No position to sell'}), 400
+    if not strategy_instance.long_position:
+        return jsonify({'error': 'No long position to sell'}), 400
     
     try:
-        # Get current price
-        if not strategy_instance.price_history:
+        current_price = strategy_instance.price_history[-1] if strategy_instance.price_history else 0
+        if current_price == 0:
             return jsonify({'error': 'No price data available'}), 400
         
-        current_price = strategy_instance.price_history[-1]
-        strategy_instance.place_sell_order(current_price, "Manual Sell")
+        strategy_instance.place_sell_order(current_price, 'Manual sell')
+        return jsonify({'success': True, 'message': 'Long position closed manually'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bot/manual-cover', methods=['POST'])
+def manual_cover():
+    global strategy_instance
+    
+    if not strategy_instance:
+        return jsonify({'error': 'Bot not initialized'}), 400
+    
+    if not strategy_instance.short_position:
+        return jsonify({'error': 'No short position to cover'}), 400
+    
+    try:
+        current_price = strategy_instance.price_history[-1] if strategy_instance.price_history else 0
+        if current_price == 0:
+            return jsonify({'error': 'No price data available'}), 400
         
-        return jsonify({'success': True, 'message': 'Manual sell executed', 'price': current_price})
+        strategy_instance.place_cover_order(current_price, 'Manual cover')
+        return jsonify({'success': True, 'message': 'Short position covered manually'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

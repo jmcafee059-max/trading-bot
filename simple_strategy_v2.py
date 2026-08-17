@@ -177,12 +177,15 @@ class SimpleRSIStrategy:
             self.currency_symbol = 'USD'  # fallback
         self.price_history = []
         self.volume_history = []  # Track volume for ETH strategy
-        self.current_position = None  # Can be 'long', 'short', or None
+        # Support simultaneous long and short positions
+        self.long_position = None  # True if long position open
+        self.short_position = None  # True if short position open
         self.trade_count = 0
         self.profit_loss = 0.0
         self.last_buy_price = None
         self.last_short_price = None  # Track short entry price
-        self.position_size = 0.0
+        self.long_position_size = 0.0  # Separate size for long
+        self.short_position_size = 0.0  # Separate size for short
         self.consecutive_losses = 0
         self.consecutive_wins = 0
         self.highest_price_since_buy = None
@@ -1661,17 +1664,17 @@ class SimpleRSIStrategy:
         
         # Only set position if order was actually successful
         if order_successful:
-            self.current_position = 'long'
+            self.long_position = True
             self.last_buy_price = current_price
-            self.position_size = position_size
+            self.long_position_size = position_size
             self.highest_price_since_buy = current_price
             self.partial_tps_taken = []  # Reset partial TPs for new position
         else:
             bot_logger.warning("Buy order not verified - not setting position (paper trading)")
             # Still update position for paper trading
-            self.current_position = 'long'
+            self.long_position = True
             self.last_buy_price = current_price
-            self.position_size = position_size
+            self.long_position_size = position_size
             self.highest_price_since_buy = current_price
             self.partial_tps_taken = []  # Reset partial TPs for new position
         
@@ -1735,9 +1738,9 @@ class SimpleRSIStrategy:
             order_successful = False
         
         # Set short position
-        self.current_position = 'short'
+        self.short_position = True
         self.last_short_price = current_price
-        self.position_size = position_size
+        self.short_position_size = position_size
         self.lowest_price_since_short = current_price
         self.partial_tps_taken = []
         
@@ -1747,7 +1750,7 @@ class SimpleRSIStrategy:
     
     def place_sell_order(self, current_price, reason):
         """Place sell order (close long position)"""
-        if self.current_position != 'long' or self.last_buy_price is None:
+        if not self.long_position or self.last_buy_price is None:
             return
         
         # Extract base currency from symbol (e.g., SAND from SAND-USDC)
@@ -1757,14 +1760,14 @@ class SimpleRSIStrategy:
         try:
             balance = self.exchange.fetch_balance()
             base_balance = balance.get(base_currency, {}).get('free', 0)
-            bot_logger.info(f"Actual {base_currency} balance: {base_balance:.6f}, Attempting to sell: {self.position_size:.6f}")
+            bot_logger.info(f"Actual {base_currency} balance: {base_balance:.6f}, Attempting to sell: {self.long_position_size:.6f}")
             
-            if base_balance < self.position_size:
-                bot_logger.warning(f"Insufficient {base_currency} balance. Have: {base_balance:.6f}, Need: {self.position_size:.6f}")
+            if base_balance < self.long_position_size:
+                bot_logger.warning(f"Insufficient {base_currency} balance. Have: {base_balance:.6f}, Need: {self.long_position_size:.6f}")
                 # Adjust sell amount to actual available balance
                 if base_balance > 0:
-                    self.position_size = base_balance
-                    bot_logger.info(f"Adjusted sell amount to available balance: {self.position_size:.6f}")
+                    self.long_position_size = base_balance
+                    bot_logger.info(f"Adjusted sell amount to available balance: {self.long_position_size:.6f}")
                 else:
                     bot_logger.error(f"No {base_currency} available to sell, skipping real order")
                     # Fall back to paper trading
@@ -1775,7 +1778,7 @@ class SimpleRSIStrategy:
         
         # Execute real sell order on exchange
         try:
-            order = self.exchange.create_market_sell_order(self.symbol, self.position_size)
+            order = self.exchange.create_market_sell_order(self.symbol, self.long_position_size)
             bot_logger.info(f"[REAL SELL ORDER PLACED] Order ID: {order.get('id', 'N/A')}")
         except Exception as e:
             bot_logger.error(f"Failed to place real sell order: {e}")
@@ -1786,7 +1789,7 @@ class SimpleRSIStrategy:
         
         # Calculate profit/loss
         profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
-        profit_amount = (current_price - self.last_buy_price) * self.position_size
+        profit_amount = (current_price - self.last_buy_price) * self.long_position_size
         
         # Update statistics
         self.trade_count += 1
@@ -1810,9 +1813,10 @@ class SimpleRSIStrategy:
         # Record trade
         trade_record = {
             'trade_number': self.trade_count,
+            'type': 'long',
             'buy_price': self.last_buy_price,
             'sell_price': current_price,
-            'position_size': self.position_size,
+            'position_size': self.long_position_size,
             'profit': profit_amount,
             'profit_pct': profit_pct,
             'reason': reason
@@ -1821,10 +1825,10 @@ class SimpleRSIStrategy:
         
         bot_logger.info(f"[SELL #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} | Capital: ${self.current_capital:.2f}")
         
-        # Reset position
-        self.current_position = None
+        # Reset long position only (keep short position if open)
+        self.long_position = None
         self.last_buy_price = None
-        self.position_size = 0.0
+        self.long_position_size = 0.0
         self.highest_price_since_buy = None
         
         # Save state
@@ -1834,7 +1838,7 @@ class SimpleRSIStrategy:
     
     def place_cover_order(self, current_price, reason):
         """Place cover order (close short position by buying back)"""
-        if self.current_position != 'short' or self.last_short_price is None:
+        if not self.short_position or self.last_short_price is None:
             return
         
         # Extract base currency from symbol
@@ -1844,7 +1848,7 @@ class SimpleRSIStrategy:
         try:
             balance = self.exchange.fetch_balance()
             usdc_balance = balance.get('USDC', {}).get('free', 0)
-            trade_value = self.position_size * current_price
+            trade_value = self.short_position_size * current_price
             
             bot_logger.info(f"USDC balance: ${usdc_balance:.2f}, Needed to cover: ${trade_value:.2f}")
             
@@ -1869,7 +1873,7 @@ class SimpleRSIStrategy:
                         order_status = self.exchange.fetch_order(order_id, self.symbol)
                         if order_status.get('status') == 'closed':
                             order_successful = True
-                            bot_logger.info(f"Cover order verified - bought back {self.position_size:.6f} {base_currency}")
+                            bot_logger.info(f"Cover order verified - bought back {self.short_position_size:.6f} {base_currency}")
                     except Exception as e:
                         bot_logger.error(f"Error verifying cover order: {e}")
                         order_successful = False
@@ -1879,7 +1883,7 @@ class SimpleRSIStrategy:
         
         # Calculate profit/loss for short (profit when price goes down)
         profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
-        profit_amount = (self.last_short_price - current_price) * self.position_size
+        profit_amount = (self.last_short_price - current_price) * self.short_position_size
         
         # Update statistics
         self.trade_count += 1
@@ -1906,7 +1910,7 @@ class SimpleRSIStrategy:
             'type': 'short',
             'entry_price': self.last_short_price,
             'exit_price': current_price,
-            'position_size': self.position_size,
+            'position_size': self.short_position_size,
             'profit': profit_amount,
             'profit_pct': profit_pct,
             'reason': reason
@@ -1915,10 +1919,10 @@ class SimpleRSIStrategy:
         
         bot_logger.info(f"[COVER #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} | Capital: ${self.current_capital:.2f}")
         
-        # Reset position
-        self.current_position = None
+        # Reset short position only (keep long position if open)
+        self.short_position = None
         self.last_short_price = None
-        self.position_size = 0.0
+        self.short_position_size = 0.0
         self.lowest_price_since_short = None
         
         # Save state
@@ -1930,7 +1934,7 @@ class SimpleRSIStrategy:
         """Execute paper trading sell when real order fails"""
         # Calculate profit/loss
         profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
-        profit_amount = (current_price - self.last_buy_price) * self.position_size
+        profit_amount = (current_price - self.last_buy_price) * self.long_position_size
         
         # Update statistics
         self.trade_count += 1
@@ -1954,9 +1958,10 @@ class SimpleRSIStrategy:
         # Record trade
         trade_record = {
             'trade_number': self.trade_count,
+            'type': 'long',
             'buy_price': self.last_buy_price,
             'sell_price': current_price,
-            'position_size': self.position_size,
+            'position_size': self.long_position_size,
             'profit': profit_amount,
             'profit_pct': profit_pct,
             'reason': f"{reason} (Paper Trading)"
@@ -1965,10 +1970,10 @@ class SimpleRSIStrategy:
         
         bot_logger.info(f"[SELL #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} (Paper Trading) | Capital: ${self.current_capital:.2f}")
         
-        # Reset position
-        self.current_position = None
+        # Reset long position only (keep short position if open)
+        self.long_position = None
         self.last_buy_price = None
-        self.position_size = 0.0
+        self.long_position_size = 0.0
         self.highest_price_since_buy = None
         
         # Save state
@@ -2021,7 +2026,15 @@ class SimpleRSIStrategy:
     
     def handle_trade_event(self, current_price):
         """Main trading logic with state machine for continuous trading"""
-        bot_logger.info(f"=== handle_trade_event called === Price: ${current_price:.2f}, Position: {self.current_position}, State: {self.trading_state.value}")
+        # Format position status for logging
+        position_status = []
+        if self.long_position:
+            position_status.append(f"LONG(${self.last_buy_price:.2f})")
+        if self.short_position:
+            position_status.append(f"SHORT(${self.last_short_price:.2f})")
+        position_str = ", ".join(position_status) if position_status else "None"
+        
+        bot_logger.info(f"=== handle_trade_event called === Price: ${current_price:.2f}, Position: {position_str}, State: {self.trading_state.value}")
         
         # Scan for best pair if enabled
         if self.enable_coin_scanner and self.symbol == 'AUTO':
@@ -2054,18 +2067,17 @@ class SimpleRSIStrategy:
                 if len(self.volume_history) > 100:
                     self.volume_history.pop(0)
         
-        bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {self.current_position or 'None'} | Trades: {self.trade_count} | State: {self.trading_state.value}")
+        bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {position_str} | Trades: {self.trade_count} | State: {self.trading_state.value}")
         
         # Need at least some data for indicators
         if len(self.price_history) < 5:
-            if self.current_position is None and self.trade_count == 0:
+            if not self.long_position and not self.short_position and self.trade_count == 0:
                 # Force first trade
                 bot_logger.info("Forcing first trade (insufficient data for indicators)")
                 self.transition_state(TradingState.ENTRY_SIGNAL, "Force first trade")
                 self.place_buy_order(current_price)
-                if self.current_position == 'long':
-                    self.transition_state(TradingState.OPEN_POSITION, "Position opened")
-                    self.transition_state(TradingState.MONITOR_POSITION, "Start monitoring")
+                if self.long_position:
+                    self.transition_state(TradingState.MONITOR_POSITION, "Position opened")
             return
         
         # Calculate indicators using complex strategy
@@ -2127,15 +2139,13 @@ class SimpleRSIStrategy:
                 return
             
             # Transition to ENTRY_SIGNAL if no position
-            if self.current_position is None:
+            if not self.long_position and not self.short_position:
                 self.transition_state(TradingState.ENTRY_SIGNAL, "No position - scanning for entry")
         
         if self.trading_state == TradingState.ENTRY_SIGNAL:
-            # Check for entry conditions
-            if self.current_position is not None:
-                # Already have a position, transition to monitoring
-                self.transition_state(TradingState.MONITOR_POSITION, "Position already open")
-                return
+            # Check for entry conditions - allow entry if the specific position type is not open
+            # Allow long entry if no long position (even if short is open)
+            # Allow short entry if no short position (even if long is open)
             
             # Prevent stale signals - require minimum time between entry signals
             current_time = time.time()
@@ -2156,19 +2166,19 @@ class SimpleRSIStrategy:
                 # For now, we'll use the should_short flag set in evaluate_buy_signals
                 pass
             
-            if should_buy:
+            if should_buy and not self.long_position:
                 self.last_entry_signal_time = time.time()
                 self.transition_state(TradingState.OPEN_POSITION, "Entry signal confirmed")
                 self.place_buy_order(current_price)
-                if self.current_position == 'long':
-                    self.transition_state(TradingState.MONITOR_POSITION, "Position opened successfully")
+                if self.long_position:
+                    self.transition_state(TradingState.MONITOR_POSITION, "Long position opened successfully")
                 else:
                     self.transition_state(TradingState.IDLE_SCANNING, "Position open failed - return to scanning")
-            elif should_short:
+            elif should_short and not self.short_position:
                 self.last_entry_signal_time = time.time()
                 self.transition_state(TradingState.OPEN_POSITION, "Short entry signal confirmed")
                 self.place_short_order(current_price)
-                if self.current_position == 'short':
+                if self.short_position:
                     self.transition_state(TradingState.MONITOR_POSITION, "Short position opened successfully")
                 else:
                     self.transition_state(TradingState.IDLE_SCANNING, "Short position open failed - return to scanning")
@@ -2176,28 +2186,33 @@ class SimpleRSIStrategy:
                 bot_logger.info("No valid entry signal - continue scanning")
         
         elif self.trading_state == TradingState.MONITOR_POSITION:
-            if self.current_position is None:
-                # Position was closed externally, transition to reset
-                self.transition_state(TradingState.POSITION_CLOSED, "Position closed externally")
+            if not self.long_position and not self.short_position:
+                # Both positions were closed externally, transition to reset
+                self.transition_state(TradingState.POSITION_CLOSED, "All positions closed externally")
                 return
             
             # Update highest price for trailing stop (long positions)
-            if self.current_position == 'long':
+            if self.long_position:
                 if self.highest_price_since_buy is None or current_price > self.highest_price_since_buy:
                     self.highest_price_since_buy = current_price
             
             # Update lowest price for trailing stop (short positions)
-            elif self.current_position == 'short':
+            if self.short_position:
                 if self.lowest_price_since_short is None or current_price < self.lowest_price_since_short:
                     self.lowest_price_since_short = current_price
             
-            # Calculate profit percentage based on position type
-            if self.current_position == 'long':
-                profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
-            elif self.current_position == 'short':
-                profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
-            else:
-                profit_pct = 0
+            # Calculate profit percentage for both positions
+            long_profit_pct = 0
+            short_profit_pct = 0
+            
+            if self.long_position:
+                long_profit_pct = ((current_price - self.last_buy_price) / self.last_buy_price) * 100
+            
+            if self.short_position:
+                short_profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
+            
+            # Use the position with the larger profit/loss for decision making
+            profit_pct = long_profit_pct if abs(long_profit_pct) > abs(short_profit_pct) else short_profit_pct
             
             # Debug logging for sell logic
             bot_logger.info(f"Position Check: Profit%={profit_pct:.2f}%, TP={self.take_profit_pct}%, SL={self.stop_loss_pct}%, RSI={rsi:.1f}, MACD={'BULL' if macd_bullish else 'BEAR'}, BB={'LOWER' if price_near_lower else 'UPPER' if price_near_upper else 'MID'}")
@@ -2207,33 +2222,49 @@ class SimpleRSIStrategy:
             if partial_tp_taken:
                 return  # Exit after partial TP, position may be closed
             
-            # Evaluate sell signals
-            should_sell, reason = self.evaluate_sell_signals(profit_pct, current_price, rsi, macd_bearish, 
+            # Evaluate sell signals for each position separately
+            should_sell_long = False
+            should_sell_short = False
+            sell_reason_long = ""
+            sell_reason_short = ""
+            
+            if self.long_position:
+                should_sell_long, sell_reason_long = self.evaluate_sell_signals(long_profit_pct, current_price, rsi, macd_bearish, 
                                                              ema_short, market_regime, dynamic_tp=None, dynamic_sl=None)
             
-            if should_sell:
-                self.transition_state(TradingState.POSITION_CLOSED, f"Exit signal: {reason}")
-                # Use appropriate exit method based on position type
-                if self.current_position == 'long':
-                    self.place_sell_order(current_price, reason)
-                elif self.current_position == 'short':
-                    self.place_cover_order(current_price, reason)
-                if self.current_position is None:
-                    self.transition_state(TradingState.RESET_STATE, "Position closed successfully")
+            if self.short_position:
+                should_sell_short, sell_reason_short = self.evaluate_sell_signals(short_profit_pct, current_price, rsi, macd_bearish, 
+                                                             ema_short, market_regime, dynamic_tp=None, dynamic_sl=None)
+            
+            # Close positions based on their individual signals
+            if should_sell_long:
+                self.transition_state(TradingState.POSITION_CLOSED, f"Long exit signal: {sell_reason_long}")
+                self.place_sell_order(current_price, sell_reason_long)
+            
+            if should_sell_short:
+                self.transition_state(TradingState.POSITION_CLOSED, f"Short exit signal: {sell_reason_short}")
+                self.place_cover_order(current_price, sell_reason_short)
+            
+            # If both positions closed, transition to reset
+            if not self.long_position and not self.short_position:
+                self.transition_state(TradingState.RESET_STATE, "All positions closed successfully")
         
         elif self.trading_state == TradingState.POSITION_CLOSED:
-            # Ensure position is fully closed
-            if self.current_position is None:
-                self.transition_state(TradingState.RESET_STATE, "Position confirmed closed")
+            # Ensure at least one position is still open or transition to reset
+            if not self.long_position and not self.short_position:
+                self.transition_state(TradingState.RESET_STATE, "All positions confirmed closed")
             else:
-                bot_logger.warning("Position not fully closed - waiting for confirmation")
+                # One position still open, continue monitoring
+                self.transition_state(TradingState.MONITOR_POSITION, "One position still open, continue monitoring")
         
         elif self.trading_state == TradingState.RESET_STATE:
-            # Reset all trade-specific variables
-            self.current_position = None
+            # Reset all trade-specific variables (only reset what's not already reset)
+            self.long_position = None
+            self.short_position = None
             self.last_buy_price = None
             self.last_short_price = None
-            self.position_size = 0.0
+            self.long_position_size = 0.0
+            self.short_position_size = 0.0
             self.highest_price_since_buy = None
             self.lowest_price_since_short = None
             self.partial_tps_taken = []
@@ -2786,7 +2817,7 @@ class SimpleRSIStrategy:
         else:
             # Dynamic take profit based on market conditions (legacy method)
             if self.is_sol_strategy:
-                if self.current_position == 'short':
+                if self.short_position:
                     # SOL-specific short parameters
                     dynamic_tp = (self.sol_short_tp_min + self.sol_short_tp_max) / 2  # Average 0.325%
                     dynamic_sl = (self.sol_short_sl_min + self.sol_short_sl_max) / 2  # Average 0.225%
