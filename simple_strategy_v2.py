@@ -220,7 +220,15 @@ class SimpleRSIStrategy:
                     actual_balance = balance.get(quote_currency, {}).get('free', 0)
                     if actual_balance > 0:
                         self.current_capital = actual_balance
-                        bot_logger.info(f"Auto-detected {quote_currency} balance: {self.currency_symbol}{self.current_capital:.2f}")
+                        bot_logger.info(f"✓ Coinbase state verified: {quote_currency} balance = {self.currency_symbol}{self.current_capital:.2f}")
+                        
+                        # Verify against saved state for consistency (Railway restart detection)
+                        if os.path.exists(state_file):
+                            with open(state_file, 'r') as f:
+                                saved_state = json.load(f)
+                                saved_capital = saved_state.get('current_capital', 0)
+                                if abs(actual_balance - saved_capital) > 1.0:  # More than $1 difference
+                                    bot_logger.warning(f"⚠ Coinbase balance ({actual_balance:.2f}) differs from saved state ({saved_capital:.2f}) - possible Railway restart or external trade")
                     else:
                         # Fallback to saved state if balance is 0
                         if os.path.exists(state_file):
@@ -231,12 +239,13 @@ class SimpleRSIStrategy:
                         else:
                             self.current_capital = 18  # Default fallback
                 except Exception as e:
-                    bot_logger.error(f"Error fetching balance: {e}")
+                    bot_logger.error(f"Error fetching balance from Coinbase: {e}")
                     # Fallback to saved state
                     if os.path.exists(state_file):
                         with open(state_file, 'r') as f:
                             state = json.load(f)
                             self.current_capital = state.get('current_capital', 18)
+                            bot_logger.warning(f"Coinbase API unavailable, using saved state: {self.currency_symbol}{self.current_capital:.2f}")
                     else:
                         self.current_capital = 18  # Default fallback
             else:
@@ -1303,12 +1312,14 @@ class SimpleRSIStrategy:
             self.consecutive_losses = 0
             if profit_amount > self.best_trade_profit:
                 self.best_trade_profit = profit_amount
+            bot_logger.info(f"[WIN #{self.trade_count}] Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Consecutive Wins: {self.consecutive_wins} | Capital: ${self.current_capital:.2f} | Best Trade: ${self.best_trade_profit:.2f}")
         else:
             self.consecutive_losses += 1
             self.consecutive_wins = 0
             self.last_loss_time = time.time()  # Record loss time for cooling off period
             if profit_amount < self.worst_trade_loss:
                 self.worst_trade_loss = profit_amount
+            bot_logger.info(f"[LOSS #{self.trade_count}] Loss: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Consecutive Losses: {self.consecutive_losses} | Capital: ${self.current_capital:.2f} | Worst Trade: ${self.worst_trade_loss:.2f}")
         
         # Record trade
         trade_record = {
@@ -1351,12 +1362,14 @@ class SimpleRSIStrategy:
             self.consecutive_losses = 0
             if profit_amount > self.best_trade_profit:
                 self.best_trade_profit = profit_amount
+            bot_logger.info(f"[WIN #{self.trade_count}] Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Consecutive Wins: {self.consecutive_wins} | Capital: ${self.current_capital:.2f} | Best Trade: ${self.best_trade_profit:.2f} | Paper Trading")
         else:
             self.consecutive_losses += 1
             self.consecutive_wins = 0
             self.last_loss_time = time.time()  # Record loss time for cooling off period
             if profit_amount < self.worst_trade_loss:
                 self.worst_trade_loss = profit_amount
+            bot_logger.info(f"[LOSS #{self.trade_count}] Loss: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Consecutive Losses: {self.consecutive_losses} | Capital: ${self.current_capital:.2f} | Worst Trade: ${self.worst_trade_loss:.2f} | Paper Trading")
         
         # Record trade
         trade_record = {
@@ -1394,21 +1407,35 @@ class SimpleRSIStrategy:
             best_pair = self.coin_scanner.get_best_pair()
             self.last_scan_time = current_time
             
-            if best_pair and best_pair['edge'] >= self.min_edge_score:
+            if best_pair:
+                # Validate the selected pair
+                if best_pair['edge'] < self.min_edge_score:
+                    bot_logger.warning(f"❌ Coin scanner rejected: edge score {best_pair['edge']:.2f} below minimum {self.min_edge_score}")
+                    return None
+                
+                if not best_pair.get('symbol') or '-' not in best_pair['symbol']:
+                    bot_logger.warning(f"❌ Coin scanner rejected: invalid symbol format '{best_pair.get('symbol')}'")
+                    return None
+                
                 # Convert to exchange format
                 new_symbol = best_pair['symbol'].replace('-', '/')
                 
                 if new_symbol != self.symbol:
-                    bot_logger.info(f"Switching from {self.symbol} to {new_symbol} (edge: {best_pair['edge']:.2f})")
+                    bot_logger.info(f"✓ Coin scanner validated: switching from {self.symbol} to {new_symbol} (edge: {best_pair['edge']:.2f}, volume: {best_pair.get('volume', 'N/A')})")
                     self.symbol = new_symbol
                     self.currency_symbol = best_pair['symbol'].split('-')[0]
                     
                     # Reset price history for new pair
                     self.price_history = []
-                    
+                    bot_logger.info(f"✓ Price history reset for new pair {new_symbol}")
+                else:
+                    bot_logger.info(f"✓ Coin scanner validated: keeping current pair {self.symbol} (edge: {best_pair['edge']:.2f})")
+                
                 return best_pair
+            else:
+                bot_logger.warning("Coin scanner returned no valid pairs")
         except Exception as e:
-            bot_logger.error(f"Error scanning for best pair: {e}")
+            bot_logger.error(f"❌ Coin scanner error: {e}")
             
         return None
     
@@ -1512,6 +1539,12 @@ class SimpleRSIStrategy:
             if self.current_position is not None:
                 # Already have a position, transition to monitoring
                 self.transition_state(TradingState.MONITOR_POSITION, "Position already open")
+                return
+            
+            # Prevent stale signals - require minimum time between entry signals
+            current_time = time.time()
+            if self.last_entry_signal_time > 0 and (current_time - self.last_entry_signal_time) < 30:
+                bot_logger.info(f"Stale signal prevention - last entry was {current_time - self.last_entry_signal_time:.1f}s ago (min 30s)")
                 return
             
             # Evaluate buy signals (existing logic)
@@ -1696,7 +1729,13 @@ class SimpleRSIStrategy:
                     'low': self.price_history   # Use close as placeholder
                 })
                 
-                ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
+                ml_signals = None
+                try:
+                    ml_signals = self.ml_ensemble.get_trading_signal(ml_data)
+                    bot_logger.info(f"ML signals generated successfully with {len(self.price_history)} price points")
+                except Exception as e:
+                    bot_logger.warning(f"ML signal generation failed with {len(self.price_history)} price points: {e} - falling back to traditional indicators")
+                    ml_signals = None
                 
                 if ml_signals:
                     bot_logger.info(f"ML Signals: {ml_signals}")
@@ -1927,19 +1966,27 @@ class SimpleRSIStrategy:
         # Apply setup score filter
         if self.use_setup_score and setup_score < self.min_setup_score:
             should_buy = False
-            bot_logger.warning(f"Setup score too low: {setup_score} < {self.min_setup_score} - trade blocked")
+            bot_logger.warning(f"❌ SETUP SCORE BLOCKED: {setup_score} < {self.min_setup_score} - trade rejected")
+        else:
+            bot_logger.info(f"✓ Setup score passed: {setup_score}/100 (min: {self.min_setup_score})")
         
         # Apply don't trade engine filters
         should_block, block_reason = self.should_block_trade(current_price)
         if should_block:
             should_buy = False
-            bot_logger.warning(f"Don't trade engine blocked trade: {block_reason}")
+            bot_logger.warning(f"❌ DON'T TRADE ENGINE BLOCKED: {block_reason} - trade rejected")
+        else:
+            bot_logger.info(f"✓ Don't trade engine passed")
         
         # Calculate adaptive threshold for logging (already used for decision above)
         if 'adaptive_threshold' not in locals():
             adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
         
-        bot_logger.info(f"Buy Check: Bullish={bullish_pct:.1f}% | Setup Score={setup_score}/100 | Adaptive Threshold={adaptive_threshold*100:.1f}% | ShouldBuy={should_buy}")
+        # Final decision logging with detailed reasoning
+        if should_buy:
+            bot_logger.info(f"✅ BUY ACCEPTED: Bullish={bullish_pct:.1f}% >= Threshold={adaptive_threshold*100:.1f}% | Setup Score={setup_score}/100")
+        else:
+            bot_logger.info(f"❌ BUY REJECTED: Bullish={bullish_pct:.1f}% < Threshold={adaptive_threshold*100:.1f}% | Setup Score={setup_score}/100")
         
         if should_buy:
             # Calculate trade amount for profitability check
