@@ -201,12 +201,22 @@ def start_bot():
         def run_bot():
             global bot_running
             iteration_count = 0
+            start_time = time.time()
+            max_runtime = bot_config.get('max_runtime_hours', 24) * 3600  # Convert to seconds
+            
             while bot_running:
+                # Check if max runtime exceeded
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= max_runtime:
+                    logging.info(f"Max runtime of {bot_config.get('max_runtime_hours', 24)} hours reached. Stopping bot.")
+                    bot_running = False
+                    break
+                
                 try:
                     iteration_count += 1
                     ticker = exchange.fetch_ticker(bot_config['symbol'])
                     current_price = ticker['last']
-                    logging.info(f"Bot loop #{iteration_count}: Fetched price ${current_price:.2f} for {bot_config['symbol']}")
+                    logging.info(f"Bot loop #{iteration_count}: Fetched price ${current_price:.2f} for {bot_config['symbol']} (Runtime: {elapsed_time/3600:.1f}h/{max_runtime/3600:.0f}h)")
                     strategy_instance.handle_trade_event(current_price)
                     
                     if iteration_count % 5 == 0:
