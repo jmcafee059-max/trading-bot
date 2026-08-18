@@ -45,7 +45,8 @@ class SimpleRSIStrategy:
         self.exchange = exchange
         self.config = config
         self.symbol = config.get('symbol', 'BTC/USDC')
-        
+        self.timeframe = config.get('timeframe', '1h')
+
         # Coin scanner integration
         self.enable_coin_scanner = config.get('enable_coin_scanner', False)
         self.coin_scanner = None
@@ -2236,7 +2237,92 @@ class SimpleRSIStrategy:
             bot_logger.error(f"❌ Coin scanner error: {e}")
             
         return None
-    
+
+    @staticmethod
+    def _resample_ohlcv(candles, multiple):
+        """Aggregate every `multiple` consecutive candles into one larger candle."""
+        if multiple <= 1 or not candles:
+            return candles
+
+        resampled = []
+        # Align from the end so the most recent (possibly partial) bucket lands last
+        start = len(candles) % multiple
+        for i in range(start, len(candles), multiple):
+            chunk = candles[i:i + multiple]
+            if not chunk:
+                continue
+            resampled.append([
+                chunk[0][0],                # timestamp of first bar in the bucket
+                chunk[0][1],                # open
+                max(c[2] for c in chunk),   # high
+                min(c[3] for c in chunk),   # low
+                chunk[-1][4],               # close
+                sum(c[5] for c in chunk),   # volume
+            ])
+        return resampled
+
+    # Minutes-per-bar for timeframes we know how to synthesize via resampling.
+    # Includes both exchange-native timeframes (candidate base units) and
+    # common non-native ones (e.g. 4h) that need to resolve to a target
+    # minute count even though they'll never be a base_candidate themselves.
+    _TIMEFRAME_MINUTES = {
+        '1m': 1, '5m': 5, '15m': 15, '30m': 30,
+        '1h': 60, '2h': 120, '3h': 180, '4h': 240, '6h': 360, '8h': 480, '12h': 720,
+        '1d': 1440,
+    }
+
+    def _fetch_ohlcv_for_timeframe(self, limit=60):
+        """
+        Fetch OHLCV candles at self.timeframe. Not every exchange supports every
+        timeframe natively (Coinbase, for example, has no native 4h granularity)
+        - unsupported-but-divisible timeframes are synthesized by resampling the
+        largest supported base timeframe that evenly divides the target.
+        """
+        native_timeframes = getattr(self.exchange, 'timeframes', None) or {}
+
+        if self.timeframe in native_timeframes:
+            return self.exchange.fetch_ohlcv(self.symbol, timeframe=self.timeframe, limit=limit)
+
+        target_minutes = self._TIMEFRAME_MINUTES.get(self.timeframe)
+        if target_minutes is None:
+            bot_logger.warning(f"Unknown timeframe '{self.timeframe}', falling back to 1h")
+            return self.exchange.fetch_ohlcv(self.symbol, timeframe='1h', limit=limit)
+
+        base_candidates = sorted(
+            [(tf, mins) for tf, mins in self._TIMEFRAME_MINUTES.items()
+             if tf in native_timeframes and mins < target_minutes and target_minutes % mins == 0],
+            key=lambda pair: -pair[1]
+        )
+        if not base_candidates:
+            bot_logger.warning(f"No supported base timeframe divides '{self.timeframe}', falling back to 1h")
+            return self.exchange.fetch_ohlcv(self.symbol, timeframe='1h', limit=limit)
+
+        base_tf, base_mins = base_candidates[0]
+        multiple = target_minutes // base_mins
+        raw = self.exchange.fetch_ohlcv(self.symbol, timeframe=base_tf, limit=limit * multiple)
+        return self._resample_ohlcv(raw, multiple)
+
+    def _refresh_price_and_volume_history(self):
+        """
+        Rebuild price_history/volume_history from real OHLCV candles at
+        self.timeframe instead of raw ticker polls. Previously price_history
+        was built by appending the live ticker price on every ~30s poll, so
+        RSI/EMA/SMA/etc. periods actually meant "N polls" rather than "N
+        candles" and the TIMEFRAME setting had no effect on indicator
+        calculation at all. Returns True on success.
+        """
+        try:
+            ohlcv = self._fetch_ohlcv_for_timeframe(limit=60)
+            if not ohlcv or len(ohlcv) < 2:
+                return False
+
+            self.price_history = [candle[4] for candle in ohlcv][-100:]
+            self.volume_history = [candle[5] for candle in ohlcv][-100:]
+            return True
+        except Exception as e:
+            bot_logger.warning(f"Failed to refresh OHLCV history for {self.symbol} @ {self.timeframe}: {e}")
+            return False
+
     def handle_trade_event(self, current_price):
         """Main trading logic with state machine for continuous trading"""
         # Format position status for logging
@@ -2259,26 +2345,22 @@ class SimpleRSIStrategy:
         # Get relative strength vs BTC
         relative_strength = self.get_relative_strength(current_price)
         
-        # Add price to history
-        self.price_history.append(current_price)
-        if len(self.price_history) > 100:
-            self.price_history.pop(0)
-        
-        # Add volume to history for ETH strategy
-        if self.is_eth_strategy or self.is_sol_strategy:
-            # Fetch ticker with volume data
-            try:
-                ticker = self.exchange.fetch_ticker(self.symbol)
-                volume = ticker.get('baseVolume', 1)  # Default to 1 if volume not available
-                self.volume_history.append(volume)
-                if len(self.volume_history) > 100:
-                    self.volume_history.pop(0)
-            except Exception as e:
-                bot_logger.warning(f"Failed to fetch volume data: {e}")
-                # Add placeholder volume
-                self.volume_history.append(1)
-                if len(self.volume_history) > 100:
-                    self.volume_history.pop(0)
+        # Refresh price/volume history from real OHLCV candles at the
+        # configured timeframe (see _refresh_price_and_volume_history). Falls
+        # back to appending the raw ticker price if the OHLCV fetch fails, so
+        # a transient error doesn't stall the bot.
+        if self._refresh_price_and_volume_history():
+            # Keep the most recent point reactive to the live ticker price
+            # rather than the forming candle's close as of the fetch.
+            if self.price_history:
+                self.price_history[-1] = current_price
+        else:
+            self.price_history.append(current_price)
+            if len(self.price_history) > 100:
+                self.price_history.pop(0)
+            self.volume_history.append(self.volume_history[-1] if self.volume_history else 1)
+            if len(self.volume_history) > 100:
+                self.volume_history.pop(0)
         
         bot_logger.info(f"#{len(self.price_history)} | Price: ${current_price:.2f} | Capital: ${self.current_capital:.2f} | Position: {position_str} | Trades: {self.trade_count} | State: {self.trading_state.value}")
         
