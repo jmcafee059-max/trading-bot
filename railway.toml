@@ -78,3 +78,12 @@ TRAILING_STOP_DISTANCE_PCT = "0.10"
 USE_BREAKEVEN = "true"
 BREAKEVEN_ACTIVATION_PCT = "0.20"
 BREAKEVEN_OFFSET_PCT = "0.02"
+
+# Real TradeKit (trader.dev) live signal webhook - see TRADEKIT_INTEGRATION.md.
+# TRADEKIT_LIVE_SIGNALS stays false until explicitly confirmed.
+# TRADEKIT_WEBHOOK_SECRET is deliberately NOT set here (this repo is public)
+# - set it directly in the Railway dashboard's Variables tab, the same way
+# API_KEY/SECRET_KEY already are.
+TRADEKIT_LIVE_SIGNALS = "false"
+TRADEKIT_MAX_SIGNAL_AGE_SECONDS = "900"
+TRADEKIT_SIGNAL_BONUS = "8"
