@@ -1,0 +1,232 @@
+[
+  {
+    "symbol": "SOL-USDC",
+    "best": {
+      "symbol": "SOL-USDC",
+      "tp": 3.0,
+      "sl": 0.5,
+      "score_thresh": 60,
+      "return_pct": 9.22196972639074,
+      "trades": 138,
+      "win_rate": 0.2246376811594203,
+      "total_profit": 92.21969726390702
+    },
+    "top10": [
+      {
+        "symbol": "SOL-USDC",
+        "tp": 3.0,
+        "sl": 0.5,
+        "score_thresh": 60,
+        "return_pct": 9.22196972639074,
+        "trades": 138,
+        "win_rate": 0.2246376811594203,
+        "total_profit": 92.21969726390702
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 2.5,
+        "sl": 1.5,
+        "score_thresh": 80,
+        "return_pct": 7.847092235919854,
+        "trades": 31,
+        "win_rate": 0.4838709677419355,
+        "total_profit": 78.4709223591985
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 1.5,
+        "sl": 2.0,
+        "score_thresh": 25,
+        "return_pct": 7.726668229426059,
+        "trades": 116,
+        "win_rate": 0.5689655172413793,
+        "total_profit": 77.26668229425793
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 1.5,
+        "sl": 2.0,
+        "score_thresh": 40,
+        "return_pct": 7.726668229426059,
+        "trades": 116,
+        "win_rate": 0.5689655172413793,
+        "total_profit": 77.26668229425793
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 3.0,
+        "sl": 0.5,
+        "score_thresh": 25,
+        "return_pct": 6.963769846411015,
+        "trades": 159,
+        "win_rate": 0.2138364779874214,
+        "total_profit": 69.63769846410977
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 3.0,
+        "sl": 0.5,
+        "score_thresh": 40,
+        "return_pct": 6.963769846411015,
+        "trades": 159,
+        "win_rate": 0.2138364779874214,
+        "total_profit": 69.63769846410977
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 2.0,
+        "sl": 1.5,
+        "score_thresh": 60,
+        "return_pct": 6.819056749880816,
+        "trades": 100,
+        "win_rate": 0.46,
+        "total_profit": 68.19056749880764
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 2.5,
+        "sl": 0.5,
+        "score_thresh": 60,
+        "return_pct": 6.401665890614935,
+        "trades": 146,
+        "win_rate": 0.2465753424657534,
+        "total_profit": 64.0166589061493
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 1.5,
+        "sl": 0.5,
+        "score_thresh": 25,
+        "return_pct": 6.334486175115581,
+        "trades": 224,
+        "win_rate": 0.32589285714285715,
+        "total_profit": 63.34486175115519
+      },
+      {
+        "symbol": "SOL-USDC",
+        "tp": 1.5,
+        "sl": 0.5,
+        "score_thresh": 40,
+        "return_pct": 6.334486175115581,
+        "trades": 224,
+        "win_rate": 0.32589285714285715,
+        "total_profit": 63.34486175115519
+      }
+    ]
+  },
+  {
+    "symbol": "ETH-USDC",
+    "best": {
+      "symbol": "ETH-USDC",
+      "tp": 2.5,
+      "sl": 1.5,
+      "score_thresh": 80,
+      "return_pct": 5.388955958568385,
+      "trades": 35,
+      "win_rate": 0.45714285714285713,
+      "total_profit": 53.889559585683905
+    },
+    "top10": [
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.5,
+        "sl": 1.5,
+        "score_thresh": 80,
+        "return_pct": 5.388955958568385,
+        "trades": 35,
+        "win_rate": 0.45714285714285713,
+        "total_profit": 53.889559585683905
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.0,
+        "sl": 1.5,
+        "score_thresh": 80,
+        "return_pct": 4.9797740685674174,
+        "trades": 39,
+        "win_rate": 0.5128205128205128,
+        "total_profit": 49.79774068567497
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.5,
+        "sl": 1.0,
+        "score_thresh": 80,
+        "return_pct": 2.5735022682924407,
+        "trades": 37,
+        "win_rate": 0.35135135135135137,
+        "total_profit": 25.73502268292434
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.0,
+        "sl": 2.0,
+        "score_thresh": 80,
+        "return_pct": 2.4098246924250133,
+        "trades": 38,
+        "win_rate": 0.5263157894736842,
+        "total_profit": 24.098246924250418
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.5,
+        "sl": 2.0,
+        "score_thresh": 80,
+        "return_pct": 2.335244884203246,
+        "trades": 35,
+        "win_rate": 0.45714285714285713,
+        "total_profit": 23.352448842032736
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 1.5,
+        "sl": 1.5,
+        "score_thresh": 80,
+        "return_pct": 2.001373225360385,
+        "trades": 41,
+        "win_rate": 0.5121951219512195,
+        "total_profit": 20.01373225360466
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.5,
+        "sl": 0.5,
+        "score_thresh": 80,
+        "return_pct": 1.899205233282328,
+        "trades": 42,
+        "win_rate": 0.2619047619047619,
+        "total_profit": 18.99205233282335
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 3.0,
+        "sl": 1.5,
+        "score_thresh": 80,
+        "return_pct": 1.5932073336587904,
+        "trades": 34,
+        "win_rate": 0.38235294117647056,
+        "total_profit": 15.932073336587864
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 2.0,
+        "sl": 1.0,
+        "score_thresh": 80,
+        "return_pct": 0.880646481447559,
+        "trades": 40,
+        "win_rate": 0.375,
+        "total_profit": 8.80646481447514
+      },
+      {
+        "symbol": "ETH-USDC",
+        "tp": 1.5,
+        "sl": 1.0,
+        "score_thresh": 80,
+        "return_pct": 0.6408515359412604,
+        "trades": 42,
+        "win_rate": 0.40476190476190477,
+        "total_profit": 6.408515359412569
+      }
+    ]
+  }
+]

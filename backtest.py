@@ -98,22 +98,49 @@ class Backtester:
         """
         if use_synthetic:
             return self._generate_synthetic_data(days, limit)
-            
+
         if not self.exchange:
             logger.error("Exchange not initialized")
             return pd.DataFrame()
-        
+
         try:
+            # Coinbase (like most exchanges) caps fetch_ohlcv at a few hundred
+            # candles per call regardless of the requested limit, so paginate
+            # forward from `since` until we hit `limit` candles or catch up
+            # to now.
             since = self.exchange.milliseconds() - (days * 24 * 60 * 60 * 1000)
-            ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since, limit)
-            
+            all_candles = []
+            seen_timestamps = set()
+
+            while len(all_candles) < limit:
+                batch = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since, limit)
+                if not batch:
+                    break
+
+                new_batch = [c for c in batch if c[0] not in seen_timestamps]
+                if not new_batch:
+                    break
+
+                all_candles.extend(new_batch)
+                seen_timestamps.update(c[0] for c in new_batch)
+
+                last_ts = batch[-1][0]
+                if last_ts <= since:
+                    break
+                since = last_ts + 1
+
+                if last_ts >= self.exchange.milliseconds() - 60_000:
+                    break
+
+            ohlcv = all_candles[-limit:]
+
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
-            
+
             logger.info(f"Fetched {len(df)} candles for {self.symbol} ({self.timeframe} timeframe)")
             return df
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch historical data: {e}")
             logger.info("Falling back to synthetic data generation")

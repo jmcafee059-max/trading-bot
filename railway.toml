@@ -14,19 +14,26 @@ PAPER_TRADING_BALANCE = "100"
 
 CAPITAL_PERCENTAGE = "40"
 VOLATILITY_MULTIPLIER = "10"
-SYMBOL = "AUTO"
+# Locked to SOL-USDC rather than AUTO - this is the symbol the parameter
+# sweep below was actually validated against. AUTO would let the coin
+# scanner wander across ~20 untested pairs.
+SYMBOL = "SOL-USDC"
 STARTING_CAPITAL = "auto"
-# Raised from 0.5 - Coinbase's real round-trip cost (fees + spread +
-# slippage on both legs) runs ~1.1-1.4% at this account's trade size, so a
-# 0.5% target was mathematically unable to ever clear the trading-cost gate.
-TAKE_PROFIT_PERCENT = "2.0"
+# TP=3.0/SL=0.5 was the best-returning combo from a 96-combination sweep
+# against ~4 months of real 1h SOL-USDC history with real trading costs
+# applied (see backtest.py): +9.22% return, 138 trades. Note: 22.5% win
+# rate - a trend-following profile (many small stop-outs, occasional big
+# winners). A more balanced alternative (TP=1.5/SL=2.0, 56.9% win rate)
+# returned nearly as much (+7.73%) with far less variance, if this proves
+# too choppy in paper trading.
+TAKE_PROFIT_PERCENT = "3.0"
 TIMEFRAME = "1h"
 RSI_PERIOD = "7"
 RSI_OVERBOUGHT = "70"
 RSI_OVERSOLD = "30"
-# Raised alongside TAKE_PROFIT_PERCENT to keep a sane ~2:1 reward:risk ratio
-# instead of an unrealistically tight stop.
-STOP_LOSS_PERCENT = "1.0"
+# Part of the same sweep-winning combo as TAKE_PROFIT_PERCENT above (6:1
+# reward:risk - tight stop, let winners run).
+STOP_LOSS_PERCENT = "0.5"
 EMA_SHORT = "9"
 EMA_LONG = "21"
 SMA_PERIOD = "50"
