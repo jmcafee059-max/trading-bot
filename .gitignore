@@ -44,3 +44,4 @@ Thumbs.db
 # Trading state files
 bot_state.json
 capital_state.json
+paper_capital_state.json

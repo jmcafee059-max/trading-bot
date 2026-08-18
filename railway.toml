@@ -5,6 +5,13 @@ builder = "nixpacks"
 startCommand = "python api_server.py"
 
 [env]
+# Simulates fills against real live prices with a fixed $100 balance -
+# never places a real order. See simple_strategy_v2.py's paper_trading
+# branches in place_buy_order/place_short_order/place_sell_order/
+# place_cover_order. Set back to "false" to resume live trading.
+PAPER_TRADING = "true"
+PAPER_TRADING_BALANCE = "100"
+
 CAPITAL_PERCENTAGE = "40"
 VOLATILITY_MULTIPLIER = "10"
 SYMBOL = "AUTO"

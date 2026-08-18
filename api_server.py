@@ -92,6 +92,11 @@ bot_config = {
     'atr_tp_multiplier_high': float(os.getenv('ATR_TP_MULTIPLIER_HIGH', '2.5')),
     'atr_sl_multiplier': float(os.getenv('ATR_SL_MULTIPLIER', '1.2')),
     'atr_period': int(os.getenv('ATR_PERIOD', '14')),
+    # Paper trading: simulate fills against real live prices without ever
+    # placing a real order. Starting balance is fixed rather than fetched
+    # from the real Coinbase account.
+    'paper_trading': os.getenv('PAPER_TRADING', 'false').lower() == 'true',
+    'paper_trading_balance': float(os.getenv('PAPER_TRADING_BALANCE', '100')),
     # These were previously never passed through, so USE_TRAILING_STOP /
     # USE_BREAKEVEN env vars had no effect - the strategy always fell back to
     # its own hardcoded default (True) regardless of what was configured.
@@ -255,11 +260,15 @@ def start_bot():
         return jsonify({'success': False, 'message': 'Bot is already running'})
     
     try:
-        # Fetch actual USDC balance from account
-        actual_capital = get_usdc_balance()
-        bot_config['starting_capital'] = actual_capital
-        
-        logging.info(f"Using actual USDC balance: ${actual_capital:.2f}")
+        if bot_config.get('paper_trading'):
+            actual_capital = bot_config['paper_trading_balance']
+            bot_config['starting_capital'] = actual_capital
+            logging.info(f"Paper trading enabled - using simulated balance: ${actual_capital:.2f}")
+        else:
+            # Fetch actual USDC balance from account
+            actual_capital = get_usdc_balance()
+            bot_config['starting_capital'] = actual_capital
+            logging.info(f"Using actual USDC balance: ${actual_capital:.2f}")
         
         # Initialize exchange
         exchange_class = getattr(ccxt, bot_config['exchange_id'])

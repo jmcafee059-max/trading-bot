@@ -47,6 +47,13 @@ class SimpleRSIStrategy:
         self.symbol = config.get('symbol', 'BTC/USDC')
         self.timeframe = config.get('timeframe', '1h')
 
+        # Paper trading: simulate fills against real live prices without ever
+        # calling a real order-placing exchange method. Market data (price,
+        # OHLCV, balance checks used only for logging) still comes from the
+        # real exchange connection.
+        self.paper_trading = config.get('paper_trading', False)
+        bot_logger.info(f"Paper trading: {self.paper_trading}")
+
         # Coin scanner integration
         self.enable_coin_scanner = config.get('enable_coin_scanner', False)
         self.coin_scanner = None
@@ -284,7 +291,9 @@ class SimpleRSIStrategy:
     
     def load_capital_state(self):
         """Load capital state from file for persistence"""
-        state_file = 'capital_state.json'
+        # Separate file for paper trading so a real run's saved balance never
+        # leaks into a paper run's starting capital (or vice versa).
+        state_file = 'paper_capital_state.json' if self.paper_trading else 'capital_state.json'
         try:
             # If starting_capital is 'auto', fetch actual balance from exchange
             if self.starting_capital == 'auto':
@@ -342,7 +351,7 @@ class SimpleRSIStrategy:
     
     def save_capital_state(self):
         """Save capital state to file"""
-        state_file = 'capital_state.json'
+        state_file = 'paper_capital_state.json' if self.paper_trading else 'capital_state.json'
         try:
             state = {
                 'current_capital': self.current_capital,
@@ -1767,74 +1776,78 @@ class SimpleRSIStrategy:
         
         order_successful = False
         order_id = None
-        
-        # Execute real buy order on exchange
-        try:
-            # Coinbase requires specific configuration for market orders
-            # Set createMarketBuyOrderRequiresPrice to False and pass cost in amount
-            self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
-            
-            order = self.exchange.create_market_buy_order(
-                self.symbol,
-                trade_value  # pass cost directly as amount
-            )
-            order_id = order.get('id', 'N/A')
-            bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order_id}")
-            
-            # Verify order was actually filled
-            if order_id and order_id != 'N/A':
-                time.sleep(2)  # Wait for order to settle
-                try:
-                    # Check order status
-                    order_status = self.exchange.fetch_order(order_id, self.symbol)
-                    if order_status.get('status') == 'closed':
-                        # Check if we actually received the base currency (SAND, ETH, etc.)
-                        balance = self.exchange.fetch_balance()
-                        # Extract base currency from symbol (e.g., SAND from SAND-USDC)
-                        base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
-                        base_balance = balance.get(base_currency, {}).get('free', 0)
-                        if base_balance > 0:
-                            order_successful = True
-                            bot_logger.info(f"Order verified - received {base_balance:.6f} {base_currency}")
-                        else:
-                            bot_logger.warning(f"Order closed but no {base_currency} received - balance: {base_balance:.6f}")
-                    else:
-                        bot_logger.warning(f"Order not closed yet - status: {order_status.get('status')}")
-                except Exception as e:
-                    bot_logger.error(f"Error verifying order: {e}")
-                    # Assume order failed if verification fails
-                    order_successful = False
-        except Exception as e:
-            bot_logger.error(f"Failed to place real buy order: {e}")
-            # Try alternative method with price
+
+        if self.paper_trading:
+            order_successful = True
+            bot_logger.info(f"[PAPER TRADE] Simulated buy fill at ${current_price:.2f}")
+        else:
+            # Execute real buy order on exchange
             try:
-                order = self.exchange.create_order(
+                # Coinbase requires specific configuration for market orders
+                # Set createMarketBuyOrderRequiresPrice to False and pass cost in amount
+                self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
+
+                order = self.exchange.create_market_buy_order(
                     self.symbol,
-                    'market',
-                    'buy',
-                    position_size,  # actual position size
-                    current_price  # current price
+                    trade_value  # pass cost directly as amount
                 )
                 order_id = order.get('id', 'N/A')
-                bot_logger.info(f"[REAL BUY ORDER PLACED (alt method)] Order ID: {order_id}")
-                
-                # Verify alternative order
+                bot_logger.info(f"[REAL BUY ORDER PLACED] Order ID: {order_id}")
+
+                # Verify order was actually filled
                 if order_id and order_id != 'N/A':
-                    time.sleep(2)
+                    time.sleep(2)  # Wait for order to settle
                     try:
-                        balance = self.exchange.fetch_balance()
-                        # Extract base currency from symbol (e.g., SAND from SAND-USDC)
-                        base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
-                        base_balance = balance.get(base_currency, {}).get('free', 0)
-                        if base_balance > 0:
-                            order_successful = True
-                            bot_logger.info(f"Alternative order verified - received {base_balance:.6f} {base_currency}")
-                    except Exception as e2:
-                        bot_logger.error(f"Error verifying alternative order: {e2}")
-            except Exception as e2:
-                bot_logger.error(f"Alternative method also failed: {e2}")
-                # Fall back to paper trading if order fails
-                bot_logger.warning("Falling back to paper trading for this order")
+                        # Check order status
+                        order_status = self.exchange.fetch_order(order_id, self.symbol)
+                        if order_status.get('status') == 'closed':
+                            # Check if we actually received the base currency (SAND, ETH, etc.)
+                            balance = self.exchange.fetch_balance()
+                            # Extract base currency from symbol (e.g., SAND from SAND-USDC)
+                            base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+                            base_balance = balance.get(base_currency, {}).get('free', 0)
+                            if base_balance > 0:
+                                order_successful = True
+                                bot_logger.info(f"Order verified - received {base_balance:.6f} {base_currency}")
+                            else:
+                                bot_logger.warning(f"Order closed but no {base_currency} received - balance: {base_balance:.6f}")
+                        else:
+                            bot_logger.warning(f"Order not closed yet - status: {order_status.get('status')}")
+                    except Exception as e:
+                        bot_logger.error(f"Error verifying order: {e}")
+                        # Assume order failed if verification fails
+                        order_successful = False
+            except Exception as e:
+                bot_logger.error(f"Failed to place real buy order: {e}")
+                # Try alternative method with price
+                try:
+                    order = self.exchange.create_order(
+                        self.symbol,
+                        'market',
+                        'buy',
+                        position_size,  # actual position size
+                        current_price  # current price
+                    )
+                    order_id = order.get('id', 'N/A')
+                    bot_logger.info(f"[REAL BUY ORDER PLACED (alt method)] Order ID: {order_id}")
+
+                    # Verify alternative order
+                    if order_id and order_id != 'N/A':
+                        time.sleep(2)
+                        try:
+                            balance = self.exchange.fetch_balance()
+                            # Extract base currency from symbol (e.g., SAND from SAND-USDC)
+                            base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+                            base_balance = balance.get(base_currency, {}).get('free', 0)
+                            if base_balance > 0:
+                                order_successful = True
+                                bot_logger.info(f"Alternative order verified - received {base_balance:.6f} {base_currency}")
+                        except Exception as e2:
+                            bot_logger.error(f"Error verifying alternative order: {e2}")
+                except Exception as e2:
+                    bot_logger.error(f"Alternative method also failed: {e2}")
+                    # Fall back to paper trading if order fails
+                    bot_logger.warning("Falling back to paper trading for this order")
         
         # Only set position if order was actually successful
         if order_successful:
@@ -1897,43 +1910,46 @@ class SimpleRSIStrategy:
         
         order_successful = False
         order_id = None
-        
-        # Execute real short order (sell borrowed asset)
-        try:
-            # For shorting, we sell the base currency
-            self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
-            
-            # Check if we have enough balance to short
-            balance = self.exchange.fetch_balance()
-            base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
-            base_balance = balance.get(base_currency, {}).get('free', 0)
-            
-            if base_balance < position_size:
-                bot_logger.warning(f"Insufficient {base_currency} balance for short. Have: {base_balance:.6f}, Need: {position_size:.6f}")
-                # For paper trading, proceed anyway
+
+        if self.paper_trading:
+            order_successful = True
+            bot_logger.info(f"[PAPER TRADE] Simulated short fill at ${current_price:.2f}")
+        else:
+            # Execute real short order (sell borrowed asset)
+            try:
+                # For shorting, we sell the base currency
+                self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
+
+                # Check if we have enough balance to short
+                balance = self.exchange.fetch_balance()
+                base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
+                base_balance = balance.get(base_currency, {}).get('free', 0)
+
+                if base_balance < position_size:
+                    bot_logger.warning(f"Insufficient {base_currency} balance for short. Have: {base_balance:.6f}, Need: {position_size:.6f}")
+                    order_successful = False
+                else:
+                    order = self.exchange.create_market_sell_order(
+                        self.symbol,
+                        position_size
+                    )
+                    order_id = order.get('id', 'N/A')
+                    bot_logger.info(f"[REAL SHORT ORDER PLACED] Order ID: {order_id}")
+
+                    # Verify order
+                    if order_id and order_id != 'N/A':
+                        time.sleep(2)
+                        try:
+                            order_status = self.exchange.fetch_order(order_id, self.symbol)
+                            if order_status.get('status') == 'closed':
+                                order_successful = True
+                                bot_logger.info(f"Short order verified - sold {position_size:.6f} {base_currency}")
+                        except Exception as e:
+                            bot_logger.error(f"Error verifying short order: {e}")
+                            order_successful = False
+            except Exception as e:
+                bot_logger.error(f"Failed to place real short order: {e}")
                 order_successful = False
-            else:
-                order = self.exchange.create_market_sell_order(
-                    self.symbol,
-                    position_size
-                )
-                order_id = order.get('id', 'N/A')
-                bot_logger.info(f"[REAL SHORT ORDER PLACED] Order ID: {order_id}")
-                
-                # Verify order
-                if order_id and order_id != 'N/A':
-                    time.sleep(2)
-                    try:
-                        order_status = self.exchange.fetch_order(order_id, self.symbol)
-                        if order_status.get('status') == 'closed':
-                            order_successful = True
-                            bot_logger.info(f"Short order verified - sold {position_size:.6f} {base_currency}")
-                    except Exception as e:
-                        bot_logger.error(f"Error verifying short order: {e}")
-                        order_successful = False
-        except Exception as e:
-            bot_logger.error(f"Failed to place real short order: {e}")
-            order_successful = False
         
         # Only set short position if order was successful
         if order_successful:
@@ -1958,7 +1974,10 @@ class SimpleRSIStrategy:
         """Place sell order (close long position)"""
         if not self.long_position or self.last_buy_price is None:
             return
-        
+
+        if self.paper_trading:
+            return self._execute_paper_sell(current_price, reason)
+
         # Extract base currency from symbol (e.g., SAND from SAND-USDC)
         base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
         
@@ -2050,47 +2069,51 @@ class SimpleRSIStrategy:
         """Place cover order (close short position by buying back)"""
         if not self.short_position or self.last_short_price is None:
             return
-        
+
         # Extract base currency from symbol
         base_currency = self.symbol.split('/')[0] if '/' in self.symbol else self.symbol.split('-')[0]
-        
-        # Check if we have enough USDC to cover
-        try:
-            balance = self.exchange.fetch_balance()
-            usdc_balance = balance.get('USDC', {}).get('free', 0)
-            trade_value = self.short_position_size * current_price
-            
-            bot_logger.info(f"USDC balance: ${usdc_balance:.2f}, Needed to cover: ${trade_value:.2f}")
-            
-            if usdc_balance < trade_value:
-                bot_logger.warning(f"Insufficient USDC to cover short. Have: ${usdc_balance:.2f}, Need: ${trade_value:.2f}")
-                # For paper trading, proceed anyway
+
+        if self.paper_trading:
+            order_successful = True
+            bot_logger.info(f"[PAPER TRADE] Simulated cover fill at ${current_price:.2f}")
+        else:
+            # Check if we have enough USDC to cover
+            try:
+                balance = self.exchange.fetch_balance()
+                usdc_balance = balance.get('USDC', {}).get('free', 0)
+                trade_value = self.short_position_size * current_price
+
+                bot_logger.info(f"USDC balance: ${usdc_balance:.2f}, Needed to cover: ${trade_value:.2f}")
+
+                if usdc_balance < trade_value:
+                    bot_logger.warning(f"Insufficient USDC to cover short. Have: ${usdc_balance:.2f}, Need: ${trade_value:.2f}")
+                    # For paper trading, proceed anyway
+                    order_successful = False
+                else:
+                    # Execute real cover order (buy back the asset)
+                    self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
+                    order = self.exchange.create_market_buy_order(
+                        self.symbol,
+                        trade_value  # pass cost directly
+                    )
+                    order_id = order.get('id', 'N/A')
+                    bot_logger.info(f"[REAL COVER ORDER PLACED] Order ID: {order_id}")
+
+                    # Verify order
+                    if order_id and order_id != 'N/A':
+                        time.sleep(2)
+                        try:
+                            order_status = self.exchange.fetch_order(order_id, self.symbol)
+                            if order_status.get('status') == 'closed':
+                                order_successful = True
+                                bot_logger.info(f"Cover order verified - bought back {self.short_position_size:.6f} {base_currency}")
+                        except Exception as e:
+                            bot_logger.error(f"Error verifying cover order: {e}")
+                            order_successful = False
+            except Exception as e:
+                bot_logger.error(f"Failed to place real cover order: {e}")
                 order_successful = False
-            else:
-                # Execute real cover order (buy back the asset)
-                self.exchange.options['createMarketBuyOrderRequiresPrice'] = False
-                order = self.exchange.create_market_buy_order(
-                    self.symbol,
-                    trade_value  # pass cost directly
-                )
-                order_id = order.get('id', 'N/A')
-                bot_logger.info(f"[REAL COVER ORDER PLACED] Order ID: {order_id}")
-                
-                # Verify order
-                if order_id and order_id != 'N/A':
-                    time.sleep(2)
-                    try:
-                        order_status = self.exchange.fetch_order(order_id, self.symbol)
-                        if order_status.get('status') == 'closed':
-                            order_successful = True
-                            bot_logger.info(f"Cover order verified - bought back {self.short_position_size:.6f} {base_currency}")
-                    except Exception as e:
-                        bot_logger.error(f"Error verifying cover order: {e}")
-                        order_successful = False
-        except Exception as e:
-            bot_logger.error(f"Failed to place real cover order: {e}")
-            order_successful = False
-        
+
         # Calculate profit/loss for short (profit when price goes down)
         profit_pct = ((self.last_short_price - current_price) / self.last_short_price) * 100
         profit_amount = (self.last_short_price - current_price) * self.short_position_size
@@ -2189,10 +2212,16 @@ class SimpleRSIStrategy:
         self.last_buy_price = None
         self.long_position_size = 0.0
         self.highest_price_since_buy = None
-        
+
+        # Reset trailing stop and breakeven for long position
+        self.trailing_stop_price = None
+        self.breakeven_triggered = False
+
         # Save state
         self.save_capital_state()
-    
+
+        return profit_amount
+
     def scan_for_best_pair(self):
         """Scan for the best trading pair using coin scanner"""
         if not self.coin_scanner:
