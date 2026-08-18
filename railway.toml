@@ -14,27 +14,25 @@ PAPER_TRADING_BALANCE = "100"
 
 CAPITAL_PERCENTAGE = "40"
 VOLATILITY_MULTIPLIER = "10"
-# Locked to SOL-USDC rather than AUTO - this is the symbol the parameter
-# sweep below was actually validated against. AUTO would let the coin
-# scanner wander across ~20 untested pairs.
-SYMBOL = "SOL-USDC"
+# Switched to NEAR-USDC. Note from the backtest: NEAR's strategy return
+# (+44.56% over ~4mo) was mostly riding a genuine +134% buy-and-hold rally
+# in that window, not a proven repeatable edge the way SOL's +9.22% was
+# (achieved while SOL itself fell ~10%) - see conversation for the full
+# comparison. Paper trading this is exactly how to find out if it holds up
+# going forward.
+SYMBOL = "NEAR-USDC"
 STARTING_CAPITAL = "auto"
-# User-requested override, down from the sweep-winning 3.0%. Below
-# Coinbase's real round-trip cost (~1.1-1.4%: fees + spread + slippage both
-# legs) - MIN_EXPECTED_NET_PROFIT's trading-cost gate will likely reject
-# most/all entries at this target rather than execute losing trades, same
-# as when the old ATR-based TP was too small. If you want it to actually
-# fill instead of getting rejected, MIN_EXPECTED_NET_PROFIT or
-# USE_TRADING_COST_MODEL would need to change too - ask first before I
-# touch that, since it's a real protection, not just a target.
-TAKE_PROFIT_PERCENT = "0.5"
+# Best combo from a 96-combination sweep against ~4 months of real 1h
+# NEAR-USDC history: TP=1.5/SL=2.0/score>=25, +44.56% return, 253 trades,
+# 59.3% win rate (63/64 qualifying combos were profitable - a robust
+# result across parameter choices, not a one-off fluke). Replaces the
+# previous SOL-tuned 0.5/0.5 override.
+TAKE_PROFIT_PERCENT = "1.5"
 TIMEFRAME = "1h"
 RSI_PERIOD = "7"
 RSI_OVERBOUGHT = "70"
 RSI_OVERSOLD = "30"
-# Part of the same sweep-winning combo as TAKE_PROFIT_PERCENT above (6:1
-# reward:risk - tight stop, let winners run).
-STOP_LOSS_PERCENT = "0.5"
+STOP_LOSS_PERCENT = "2.0"
 EMA_SHORT = "9"
 EMA_LONG = "21"
 SMA_PERIOD = "50"
@@ -68,7 +66,11 @@ MAX_PAIRS_TO_SCAN = "20"
 ENABLE_SHORT_TRADING = "false"
 
 USE_SETUP_SCORE = "true"
-MIN_SETUP_SCORE = "80"
+# Unlike SOL/ETH (which use their own hardcoded setup-score gates that
+# ignore this value entirely - see the SOL exit-logic fix earlier), NEAR
+# has no such special case, so this generic gate genuinely governs its
+# entries. Lowered to match the winning sweep combo's score_thresh=25.
+MIN_SETUP_SCORE = "25"
 
 USE_BTC_WEATHER = "true"
 BTC_WEATHER_WEIGHT = "0.30"
