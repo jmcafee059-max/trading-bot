@@ -19,14 +19,15 @@ VOLATILITY_MULTIPLIER = "10"
 # scanner wander across ~20 untested pairs.
 SYMBOL = "SOL-USDC"
 STARTING_CAPITAL = "auto"
-# TP=3.0/SL=0.5 was the best-returning combo from a 96-combination sweep
-# against ~4 months of real 1h SOL-USDC history with real trading costs
-# applied (see backtest.py): +9.22% return, 138 trades. Note: 22.5% win
-# rate - a trend-following profile (many small stop-outs, occasional big
-# winners). A more balanced alternative (TP=1.5/SL=2.0, 56.9% win rate)
-# returned nearly as much (+7.73%) with far less variance, if this proves
-# too choppy in paper trading.
-TAKE_PROFIT_PERCENT = "3.0"
+# User-requested override, down from the sweep-winning 3.0%. Below
+# Coinbase's real round-trip cost (~1.1-1.4%: fees + spread + slippage both
+# legs) - MIN_EXPECTED_NET_PROFIT's trading-cost gate will likely reject
+# most/all entries at this target rather than execute losing trades, same
+# as when the old ATR-based TP was too small. If you want it to actually
+# fill instead of getting rejected, MIN_EXPECTED_NET_PROFIT or
+# USE_TRADING_COST_MODEL would need to change too - ask first before I
+# touch that, since it's a real protection, not just a target.
+TAKE_PROFIT_PERCENT = "0.5"
 TIMEFRAME = "1h"
 RSI_PERIOD = "7"
 RSI_OVERBOUGHT = "70"
