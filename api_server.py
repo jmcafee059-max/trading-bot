@@ -92,6 +92,15 @@ bot_config = {
     'atr_tp_multiplier_high': float(os.getenv('ATR_TP_MULTIPLIER_HIGH', '2.5')),
     'atr_sl_multiplier': float(os.getenv('ATR_SL_MULTIPLIER', '1.2')),
     'atr_period': int(os.getenv('ATR_PERIOD', '14')),
+    # These were previously never passed through, so USE_TRAILING_STOP /
+    # USE_BREAKEVEN env vars had no effect - the strategy always fell back to
+    # its own hardcoded default (True) regardless of what was configured.
+    'use_trailing_stop': os.getenv('USE_TRAILING_STOP', 'true').lower() == 'true',
+    'trailing_stop_activation_pct': float(os.getenv('TRAILING_STOP_ACTIVATION_PCT', '0.15')),
+    'trailing_stop_distance_pct': float(os.getenv('TRAILING_STOP_DISTANCE_PCT', '0.10')),
+    'use_breakeven': os.getenv('USE_BREAKEVEN', 'true').lower() == 'true',
+    'breakeven_activation_pct': float(os.getenv('BREAKEVEN_ACTIVATION_PCT', '0.20')),
+    'breakeven_offset_pct': float(os.getenv('BREAKEVEN_OFFSET_PCT', '0.02')),
     'enable_short_trading': os.getenv('ENABLE_SHORT_TRADING', 'false').lower() == 'true',
     'max_runtime_hours': int(os.getenv('MAX_RUNTIME_HOURS', '24')),
     'hedged_mode': os.getenv('HEDGED_MODE', 'false').lower() == 'true',
