@@ -3241,28 +3241,24 @@ class SimpleRSIStrategy:
                 bot_logger.info(f"SHORT BREAKEVEN TRIGGERED: {reason}")
                 return should_sell, reason
         
-        # Use ATR-based TP/SL if enabled, otherwise use dynamic fixed percentages
+        # Use ATR-based TP/SL if enabled, otherwise use the configured fixed
+        # percentages (TAKE_PROFIT_PERCENT/STOP_LOSS_PERCENT). SOL/ETH used to
+        # get their own hardcoded ~0.325% targets here regardless of config -
+        # smaller than Coinbase's real round-trip trading cost (~1.1-1.4%),
+        # so a "successful" hit of that old target was still frequently a net
+        # loss after fees, and no TAKE_PROFIT_PERCENT/STOP_LOSS_PERCENT change
+        # ever reached live SOL/ETH trades at all. There was also a
+        # copy-paste bug where the SOL long stop-loss reused the take-profit
+        # range instead of sol_sl_min/sol_sl_max.
         if self.use_atr_tp_sl:
             dynamic_tp, dynamic_sl = self.calculate_atr_tp_sl(current_price, market_regime)
         else:
-            # Dynamic take profit based on market conditions (legacy method)
-            if self.is_sol_strategy:
-                if self.short_position:
-                    # SOL-specific short parameters
-                    dynamic_tp = (self.sol_short_tp_min + self.sol_short_tp_max) / 2  # Average 0.325%
-                    dynamic_sl = (self.sol_short_sl_min + self.sol_short_sl_max) / 2  # Average 0.225%
-                else:
-                    # SOL-specific long parameters
-                    dynamic_tp = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
-                    dynamic_sl = (self.sol_tp_min + self.sol_tp_max) / 2  # Average 0.325%
-            else:
-                # Generic parameters
-                dynamic_tp = self.take_profit_pct
-                if "HIGH_VOL" in market_regime:
-                    dynamic_tp *= 1.5  # Higher targets in volatile markets
-                elif "LOW_VOL" in market_regime:
-                    dynamic_tp *= 0.8  # Lower targets in calm markets
-                dynamic_sl = self.stop_loss_pct
+            dynamic_tp = self.take_profit_pct
+            if "HIGH_VOL" in market_regime:
+                dynamic_tp *= 1.5  # Higher targets in volatile markets
+            elif "LOW_VOL" in market_regime:
+                dynamic_tp *= 0.8  # Lower targets in calm markets
+            dynamic_sl = self.stop_loss_pct
         
         # Take profit with dynamic adjustment
         if profit_pct >= dynamic_tp - 0.01:  # Larger tolerance for floating point precision
