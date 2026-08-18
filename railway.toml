@@ -42,7 +42,10 @@ MAX_PAIRS_TO_SCAN = "20"
 # previously unset here, so they silently defaulted to off (or, for
 # MIN_CONFIDENCE_THRESHOLD above, a much more permissive 0.1) even though
 # the local config enables them for better trade quality and risk control.
-ENABLE_SHORT_TRADING = "true"
+# Temporarily off while debugging why the SOL short-setup code path stalls
+# mid-evaluation (never reaches its own setup-score log line). Longs are
+# unaffected by this and are the priority right now.
+ENABLE_SHORT_TRADING = "false"
 
 USE_SETUP_SCORE = "true"
 MIN_SETUP_SCORE = "80"
