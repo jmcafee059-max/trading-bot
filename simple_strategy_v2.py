@@ -2670,6 +2670,9 @@ class SimpleRSIStrategy:
         should_buy = False
         bullish_signals = 0
         total_signals = 0
+        # Safe default - only overwritten below if ML is enabled and produces
+        # a signal. Referenced later when computing the generic setup score.
+        ml_buy_score = 0
         
         # RSI signals
         total_signals += 1
@@ -3151,7 +3154,7 @@ class SimpleRSIStrategy:
         # Calculate 100-point setup score
         setup_score = self.calculate_setup_score(
             rsi, trend, ema_short, ema_long, macd_bullish, price_near_lower,
-            btc_weather, relative_strength, 0, market_regime  # ml_buy_score not available here
+            btc_weather, relative_strength, ml_buy_score, market_regime
         )
         
         # Apply setup score filter - only for symbols WITHOUT their own dedicated
