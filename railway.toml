@@ -20,7 +20,12 @@ EMA_LONG = "21"
 SMA_PERIOD = "50"
 VOLUME_THRESHOLD = "1.5"
 MOMENTUM_PERIOD = "14"
-MAX_POSITION_SIZE = "0.5"
+# Raised from 0.5 - at the account's current small balance, Coinbase's $2
+# minimum order size is a big enough fraction of total capital that a 50%
+# cap made every trade size compute below the floor and get silently
+# rejected. Lower this back down once the account balance grows enough that
+# a smaller cap can still clear $2 per trade.
+MAX_POSITION_SIZE = "0.95"
 MIN_CONFIDENCE_THRESHOLD = "0.44"
 PROFIT_MULTIPLIER = "5.0"
 AGGRESSIVE_MODE = "true"

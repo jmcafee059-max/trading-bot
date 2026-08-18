@@ -3125,8 +3125,12 @@ class SimpleRSIStrategy:
             btc_weather, relative_strength, 0, market_regime  # ml_buy_score not available here
         )
         
-        # Apply setup score filter
-        if self.use_setup_score and setup_score < self.min_setup_score:
+        # Apply setup score filter - only for symbols WITHOUT their own dedicated
+        # scoring path. SOL/ETH already gated should_buy above using thresholds
+        # tuned for their momentum patterns (sol_min_setup_score=25,
+        # eth_min_setup_score=70); applying this generic 80-point gate on top
+        # of those would silently override an already-approved SOL/ETH trade.
+        if self.use_setup_score and not (self.is_sol_strategy or self.is_eth_strategy) and setup_score < self.min_setup_score:
             should_buy = False
             bot_logger.warning(f"❌ SETUP SCORE BLOCKED: {setup_score} < {self.min_setup_score} - trade rejected")
         else:
