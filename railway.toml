@@ -60,10 +60,13 @@ MAX_PAIRS_TO_SCAN = "20"
 # previously unset here, so they silently defaulted to off (or, for
 # MIN_CONFIDENCE_THRESHOLD above, a much more permissive 0.1) even though
 # the local config enables them for better trade quality and risk control.
-# Temporarily off while debugging why the SOL short-setup code path stalls
-# mid-evaluation (never reaches its own setup-score log line). Longs are
-# unaffected by this and are the priority right now.
-ENABLE_SHORT_TRADING = "false"
+# Re-enabled: root-caused the SOL short-setup stall (price_near_upper was
+# referenced but never passed into evaluate_buy_signals - NameError on every
+# attempt) and fixed it, and separately discovered/fixed that no non-SOL
+# symbol (which includes NEAR, currently configured below) ever actually
+# set should_short=True regardless of this flag - the sell-signal detection
+# only ever vetoed longs. Both fixed now.
+ENABLE_SHORT_TRADING = "true"
 
 USE_SETUP_SCORE = "true"
 # Unlike SOL/ETH (which use their own hardcoded setup-score gates that

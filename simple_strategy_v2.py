@@ -2481,7 +2481,8 @@ class SimpleRSIStrategy:
             should_buy, should_short = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish,
                                                    momentum_positive, price_near_lower, rsi_divergence,
                                                    bullish_breakout, engulfing_pattern, pin_bar, market_regime,
-                                                   btc_weather, relative_strength, current_price)
+                                                   btc_weather, relative_strength, current_price,
+                                                   price_near_upper, bearish_breakdown)
 
             opened_position = False
 
@@ -2527,7 +2528,8 @@ class SimpleRSIStrategy:
                     should_buy, should_short = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish,
                                                            momentum_positive, price_near_lower, rsi_divergence,
                                                            bullish_breakout, engulfing_pattern, pin_bar, market_regime,
-                                                           btc_weather, relative_strength, current_price)
+                                                           btc_weather, relative_strength, current_price,
+                                                           price_near_upper, bearish_breakdown)
 
                     if missing_long and should_buy:
                         self.last_entry_signal_time = current_time
@@ -2663,16 +2665,23 @@ class SimpleRSIStrategy:
             # Return to scanning for next trade
             self.transition_state(TradingState.IDLE_SCANNING, "Ready for next trade")
     
-    def evaluate_buy_signals(self, rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish, 
-                           momentum_positive, price_near_lower, rsi_divergence, bullish_breakout, 
-                           engulfing_pattern, pin_bar, market_regime, btc_weather, relative_strength, current_price):
+    def evaluate_buy_signals(self, rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish,
+                           momentum_positive, price_near_lower, rsi_divergence, bullish_breakout,
+                           engulfing_pattern, pin_bar, market_regime, btc_weather, relative_strength, current_price,
+                           price_near_upper=False, bearish_breakdown=False):
         """Evaluate buy signals - extracted from main logic for state machine"""
         should_buy = False
+        should_short = False
         bullish_signals = 0
         total_signals = 0
         # Safe default - only overwritten below if ML is enabled and produces
         # a signal. Referenced later when computing the generic setup score.
         ml_buy_score = 0
+        # Set True by any genuine bearish signal (STRONG SELL/SELL/ML sell
+        # score) below. Used after the ML block to decide should_short for
+        # non-SOL symbols, reusing the same signal detection that already
+        # existed for vetoing longs but never fed into shorting.
+        bearish_signal_detected = False
         
         # RSI signals
         total_signals += 1
@@ -2851,10 +2860,12 @@ class SimpleRSIStrategy:
                         elif 'STRONG SELL' in combined_signal['recommendation']:
                             should_buy = False
                             bullish_pct = 0
+                            bearish_signal_detected = True
                             bot_logger.info("COMBINED STRONG SELL signal")
                         elif 'SELL' in combined_signal['recommendation']:
                             should_buy = False
                             bullish_pct = min(bullish_pct, 20)
+                            bearish_signal_detected = True
                             bot_logger.info("COMBINED SELL signal")
                         else:
                             # Fallback to ML-only logic
@@ -2866,6 +2877,7 @@ class SimpleRSIStrategy:
                                 elif ml_sell_score >= 3:
                                     should_buy = False
                                     bullish_pct = 0
+                                    bearish_signal_detected = True
                                     bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
                                 else:
                                     should_buy = False
@@ -2882,6 +2894,7 @@ class SimpleRSIStrategy:
                                 elif ml_sell_score >= 3:
                                     should_buy = False
                                     bullish_pct = 0
+                                    bearish_signal_detected = True
                                     bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
                                 else:
                                     adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
@@ -2896,6 +2909,7 @@ class SimpleRSIStrategy:
                         elif ml_sell_score >= 2:  # Lowered from 3 for more frequent trades
                             should_buy = False
                             bullish_pct = 0  # ML-only mode
+                            bearish_signal_detected = True
                             bot_logger.info(f"ML-ONLY SELL signal - score: {ml_sell_score}")
                         else:
                             should_buy = False  # ML uncertain - don't trade
@@ -2913,6 +2927,7 @@ class SimpleRSIStrategy:
                         elif ml_sell_score >= 3:
                             should_buy = False
                             bullish_pct = 0  # Override traditional indicators
+                            bearish_signal_detected = True
                             bot_logger.info(f"ML SELL signal - score: {ml_sell_score}")
                         else:
                             adaptive_threshold = self.get_adaptive_confidence_threshold(market_regime, bullish_pct / 100)
@@ -2971,7 +2986,17 @@ class SimpleRSIStrategy:
         if self.trade_count == 0 and bullish_pct > 0:
             should_buy = True
             bot_logger.info("Force first trade - no previous trades")
-        
+
+        # Generic short entry: for symbols without their own dedicated short
+        # path (SOL has one below), a genuine bearish signal detected above
+        # (STRONG SELL/SELL/ML sell score) opens a short, mirroring how a
+        # bullish signal opens a long. Previously this signal only ever
+        # vetoed should_buy - it never resulted in should_short=True, so
+        # ENABLE_SHORT_TRADING had no effect at all for non-SOL symbols.
+        if self.enable_short_trading and not self.is_sol_strategy and bearish_signal_detected:
+            should_short = True
+            bot_logger.info("📉 Generic bearish signal detected - short entry approved")
+
         # ETH-SPECIFIC STRATEGY
         if self.is_eth_strategy:
             bot_logger.info("🔷 ETH-SPECIFIC STRATEGY ACTIVE")
@@ -3114,8 +3139,11 @@ class SimpleRSIStrategy:
             else:
                 bot_logger.warning(f"❌ SOL SHORT SETUP TOO LOW ({sol_short_setup_score} < {self.sol_short_min_setup_score}) - Short rejected")
                 should_short = False
-        else:
-            should_short = False
+        # Non-SOL symbols: should_short is set by the generic sell-signal
+        # detection above (ML sell score / OpenAI SELL signal), not reset
+        # here - this used to unconditionally force it back to False,
+        # meaning no non-SOL symbol could ever short regardless of any
+        # signal, even with ENABLE_SHORT_TRADING on.
         
         # Apply BTC market weather filter
         if self.use_btc_weather and btc_weather:
@@ -3168,10 +3196,13 @@ class SimpleRSIStrategy:
         else:
             bot_logger.info(f"✓ Setup score passed: {setup_score}/100 (min: {self.min_setup_score})")
         
-        # Apply don't trade engine filters
+        # Apply don't trade engine filters - a portfolio-level risk control
+        # (consecutive-loss cooldown etc.), so it applies to shorts too, not
+        # just longs.
         should_block, block_reason = self.should_block_trade(current_price)
         if should_block:
             should_buy = False
+            should_short = False
             bot_logger.warning(f"❌ DON'T TRADE ENGINE BLOCKED: {block_reason} - trade rejected")
         else:
             bot_logger.info(f"✓ Don't trade engine passed")
@@ -3202,6 +3233,24 @@ class SimpleRSIStrategy:
             if not self.is_trade_profitable(current_price, target_price, base_trade_amount):
                 bot_logger.warning("Trade rejected: Not profitable after trading costs")
                 should_buy = False
+
+        if should_short:
+            # Mirror of the long check above - a short's target is below
+            # current_price, so entry_price/target_price are passed swapped
+            # into is_trade_profitable (which assumes target > entry) to get
+            # a correctly positive gross-profit figure for a price decline.
+            base_trade_amount = self.current_capital * (self.capital_percentage / 100)
+
+            if self.use_atr_tp_sl:
+                dynamic_tp, _ = self.calculate_atr_tp_sl(current_price, market_regime)
+            else:
+                dynamic_tp = self.take_profit_pct
+
+            target_price = current_price * (1 - dynamic_tp / 100)
+
+            if not self.is_trade_profitable(target_price, current_price, base_trade_amount):
+                bot_logger.warning("Short trade rejected: Not profitable after trading costs")
+                should_short = False
 
         return should_buy, should_short
 
