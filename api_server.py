@@ -36,6 +36,13 @@ bot_config = {
     'api_key': os.getenv('API_KEY'),
     'secret_key': os.getenv('SECRET_KEY'),
     'symbol': os.getenv('SYMBOL', 'BTC/USDC'),
+    # These were previously never passed through, so ENABLE_COIN_SCANNER had
+    # no effect - the strategy's enable_coin_scanner always fell back to its
+    # own default (False) regardless of the env var.
+    'enable_coin_scanner': os.getenv('ENABLE_COIN_SCANNER', 'false').lower() == 'true',
+    'scan_interval_minutes': int(os.getenv('SCAN_INTERVAL_MINUTES', '5')),
+    'min_edge_score': float(os.getenv('MIN_EDGE_SCORE', '2.0')),
+    'max_pairs_to_scan': int(os.getenv('MAX_PAIRS_TO_SCAN', '20')),
     'timeframe': os.getenv('TIMEFRAME', '15m'),
     'starting_capital': float(os.getenv('STARTING_CAPITAL', '18')) if os.getenv('STARTING_CAPITAL', '18') != 'auto' else 18,
     'capital_percentage': float(os.getenv('CAPITAL_PERCENTAGE', '90')),
