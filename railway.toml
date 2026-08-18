@@ -69,8 +69,12 @@ USE_SETUP_SCORE = "true"
 # Unlike SOL/ETH (which use their own hardcoded setup-score gates that
 # ignore this value entirely - see the SOL exit-logic fix earlier), NEAR
 # has no such special case, so this generic gate genuinely governs its
-# entries. Lowered to match the winning sweep combo's score_thresh=25.
-MIN_SETUP_SCORE = "25"
+# entries. User-requested override, down from the sweep-validated 25 - lets
+# it act on oversold conditions without waiting for full trend confirmation
+# (EMA/MACD/trend all bearish costs -20 points on their own). Trades more
+# often, likely at lower quality - the sweep didn't validate scores this
+# low, so this is unproven versus 25.
+MIN_SETUP_SCORE = "15"
 
 USE_BTC_WEATHER = "true"
 BTC_WEATHER_WEIGHT = "0.30"
