@@ -9,12 +9,17 @@ CAPITAL_PERCENTAGE = "40"
 VOLATILITY_MULTIPLIER = "10"
 SYMBOL = "AUTO"
 STARTING_CAPITAL = "auto"
-TAKE_PROFIT_PERCENT = "0.5"
+# Raised from 0.5 - Coinbase's real round-trip cost (fees + spread +
+# slippage on both legs) runs ~1.1-1.4% at this account's trade size, so a
+# 0.5% target was mathematically unable to ever clear the trading-cost gate.
+TAKE_PROFIT_PERCENT = "2.0"
 TIMEFRAME = "1h"
 RSI_PERIOD = "7"
 RSI_OVERBOUGHT = "70"
 RSI_OVERSOLD = "30"
-STOP_LOSS_PERCENT = "0.3"
+# Raised alongside TAKE_PROFIT_PERCENT to keep a sane ~2:1 reward:risk ratio
+# instead of an unrealistically tight stop.
+STOP_LOSS_PERCENT = "1.0"
 EMA_SHORT = "9"
 EMA_LONG = "21"
 SMA_PERIOD = "50"
@@ -68,7 +73,13 @@ ESTIMATED_SPREAD_PERCENT = "0.02"
 ESTIMATED_SLIPPAGE_PERCENT = "0.05"
 MIN_EXPECTED_NET_PROFIT = "0.10"
 
-USE_ATR_TP_SL = "true"
+# Off for now - these multipliers were tuned against TradeKit's ~0.05%
+# backtest commission assumption, nowhere close to Coinbase spot's real
+# ~1.1-1.4% round-trip cost, so the resulting dynamic TP targets were too
+# small to ever pass the trading-cost gate. Using the fixed
+# TAKE_PROFIT_PERCENT/STOP_LOSS_PERCENT above instead until ATR multipliers
+# can be retuned against real Coinbase costs.
+USE_ATR_TP_SL = "false"
 ATR_TP_MULTIPLIER_LOW = "0.8"
 ATR_TP_MULTIPLIER_NORMAL = "1.5"
 ATR_TP_MULTIPLIER_HIGH = "2.0"
