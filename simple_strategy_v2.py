@@ -2366,44 +2366,70 @@ class SimpleRSIStrategy:
                 bot_logger.info(f"Stale signal prevention - last entry was {current_time - self.last_entry_signal_time:.1f}s ago (min 30s)")
                 return
             
-            # Evaluate buy signals (existing logic for longs)
-            should_buy = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish, 
-                                                   momentum_positive, price_near_lower, rsi_divergence, 
+            # Evaluate long and short signals together - both can fire independently
+            should_buy, should_short = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish,
+                                                   momentum_positive, price_near_lower, rsi_divergence,
                                                    bullish_breakout, engulfing_pattern, pin_bar, market_regime,
                                                    btc_weather, relative_strength, current_price)
-            
-            # Evaluate short signals (if enabled)
-            should_short = False
-            if self.enable_short_trading:
-                # Reuse evaluate_buy_signals but with inverted logic for shorts
-                # For now, we'll use the should_short flag set in evaluate_buy_signals
-                pass
-            
+
+            opened_position = False
+
             if should_buy and not self.long_position:
                 self.last_entry_signal_time = time.time()
                 self.transition_state(TradingState.OPEN_POSITION, "Entry signal confirmed")
                 self.place_buy_order(current_price)
                 if self.long_position:
-                    self.transition_state(TradingState.MONITOR_POSITION, "Long position opened successfully")
-                else:
-                    self.transition_state(TradingState.IDLE_SCANNING, "Position open failed - return to scanning")
-            elif should_short and not self.short_position:
+                    opened_position = True
+                    bot_logger.info("Long position opened successfully")
+
+            if should_short and not self.short_position:
                 self.last_entry_signal_time = time.time()
                 self.transition_state(TradingState.OPEN_POSITION, "Short entry signal confirmed")
                 self.place_short_order(current_price)
                 if self.short_position:
-                    self.transition_state(TradingState.MONITOR_POSITION, "Short position opened successfully")
-                else:
-                    self.transition_state(TradingState.IDLE_SCANNING, "Short position open failed - return to scanning")
-            else:
+                    opened_position = True
+                    bot_logger.info("Short position opened successfully")
+
+            if opened_position:
+                self.transition_state(TradingState.MONITOR_POSITION, "Position(s) opened")
+            elif not should_buy and not should_short:
                 bot_logger.info("No valid entry signal - continue scanning")
+                self.transition_state(TradingState.IDLE_SCANNING, "No valid entry signal - continue scanning")
+            else:
+                self.transition_state(TradingState.IDLE_SCANNING, "Position open failed - return to scanning")
         
         elif self.trading_state == TradingState.MONITOR_POSITION:
             if not self.long_position and not self.short_position:
                 # Both positions were closed externally, transition to reset
                 self.transition_state(TradingState.POSITION_CLOSED, "All positions closed externally")
                 return
-            
+
+            # If only one side is open, keep scanning for the missing side too,
+            # so long and short positions can be held simultaneously instead of
+            # requiring the bot to go fully flat before it looks for the other
+            # direction again.
+            missing_long = not self.long_position
+            missing_short = not self.short_position and self.enable_short_trading
+            if missing_long or missing_short:
+                current_time = time.time()
+                if self.last_entry_signal_time == 0 or (current_time - self.last_entry_signal_time) >= 30:
+                    should_buy, should_short = self.evaluate_buy_signals(rsi, trend, ema_short, ema_long, price_above_sma, macd_bullish,
+                                                           momentum_positive, price_near_lower, rsi_divergence,
+                                                           bullish_breakout, engulfing_pattern, pin_bar, market_regime,
+                                                           btc_weather, relative_strength, current_price)
+
+                    if missing_long and should_buy:
+                        self.last_entry_signal_time = current_time
+                        self.place_buy_order(current_price)
+                        if self.long_position:
+                            bot_logger.info("Long position opened alongside existing short position")
+
+                    if missing_short and should_short:
+                        self.last_entry_signal_time = current_time
+                        self.place_short_order(current_price)
+                        if self.short_position:
+                            bot_logger.info("Short position opened alongside existing long position")
+
             # Update highest price for trailing stop (long positions)
             if self.long_position:
                 if self.highest_price_since_buy is None or current_price > self.highest_price_since_buy:
@@ -3058,9 +3084,9 @@ class SimpleRSIStrategy:
             if not self.is_trade_profitable(current_price, target_price, base_trade_amount):
                 bot_logger.warning("Trade rejected: Not profitable after trading costs")
                 should_buy = False
-        
-        return should_buy
-    
+
+        return should_buy, should_short
+
     def evaluate_sell_signals(self, profit_pct, current_price, rsi, macd_bearish, ema_short, market_regime, dynamic_tp=None, dynamic_sl=None):
         """Evaluate sell signals - extracted from main logic for state machine"""
         should_sell = False
