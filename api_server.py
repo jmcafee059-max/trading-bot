@@ -6,6 +6,7 @@ import json
 from dotenv import load_dotenv
 import ccxt
 from simple_strategy_v2 import SimpleRSIStrategy
+from tradekit_signals import signal_store
 import time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -93,7 +94,25 @@ bot_config = {
     'atr_period': int(os.getenv('ATR_PERIOD', '14')),
     'enable_short_trading': os.getenv('ENABLE_SHORT_TRADING', 'false').lower() == 'true',
     'max_runtime_hours': int(os.getenv('MAX_RUNTIME_HOURS', '24')),
+    'hedged_mode': os.getenv('HEDGED_MODE', 'false').lower() == 'true',
+    'max_signal_age_seconds': int(os.getenv('MAX_SIGNAL_AGE_SECONDS', '30')),
+    'use_synchronized_execution': os.getenv('USE_SYNCHRONIZED_EXECUTION', 'false').lower() == 'true',
+    'use_tradekit': os.getenv('USE_TRADEKIT', 'false').lower() == 'true',
+    'tradekit_min_score': int(os.getenv('TRADEKIT_MIN_SCORE', '80')),
+    'tradekit_liquidity_filter': os.getenv('TRADEKIT_LIQUIDITY_FILTER', 'true').lower() == 'true',
+    'tradekit_orderbook_analysis': os.getenv('TRADEKIT_ORDERBOOK_ANALYSIS', 'true').lower() == 'true',
+    'tradekit_volatility_analysis': os.getenv('TRADEKIT_VOLATILITY_ANALYSIS', 'true').lower() == 'true',
+    'tradekit_backtesting': os.getenv('TRADEKIT_BACKTESTING', 'true').lower() == 'true',
+    'tradekit_debug': os.getenv('TRADEKIT_DEBUG', 'false').lower() == 'true',
+    # Real TradeKit (trader.dev) live signal webhook - separate from the
+    # local indicator adapter above. Off by default; does not change any
+    # existing trading behavior unless explicitly enabled.
+    'tradekit_live_signals': os.getenv('TRADEKIT_LIVE_SIGNALS', 'false').lower() == 'true',
+    'tradekit_max_signal_age_seconds': int(os.getenv('TRADEKIT_MAX_SIGNAL_AGE_SECONDS', '900')),
+    'tradekit_signal_bonus': float(os.getenv('TRADEKIT_SIGNAL_BONUS', '8')),
 }
+
+TRADEKIT_WEBHOOK_SECRET = os.getenv('TRADEKIT_WEBHOOK_SECRET', '')
 
 @app.route('/')
 def index():
@@ -102,6 +121,30 @@ def index():
 @app.route('/api/config', methods=['GET'])
 def get_config():
     return jsonify(bot_config)
+
+@app.route('/webhook/tradekit', methods=['POST'])
+def tradekit_webhook():
+    """
+    Receives alert payloads from a real TradeKit (trader.dev) Webhook alert
+    channel. This never places or modifies orders itself - it only records
+    the latest signal so the strategy can optionally use it as one more
+    input, gated behind TRADEKIT_LIVE_SIGNALS (off by default).
+    """
+    if not TRADEKIT_WEBHOOK_SECRET:
+        return jsonify({'error': 'webhook not configured (TRADEKIT_WEBHOOK_SECRET unset)'}), 503
+
+    provided_secret = request.headers.get('X-Tradekit-Secret', '')
+    if provided_secret != TRADEKIT_WEBHOOK_SECRET:
+        return jsonify({'error': 'unauthorized'}), 401
+
+    payload = request.get_json(silent=True) or {}
+    entry = signal_store.record_signal(payload)
+    logger.info(f"TradeKit webhook signal received: {entry['asset']} {entry['direction']} ({entry['signal_type']})")
+    return jsonify({'status': 'ok', 'recorded': entry}), 200
+
+@app.route('/webhook/tradekit/status', methods=['GET'])
+def tradekit_webhook_status():
+    return jsonify(signal_store.all_signals())
 
 @app.route('/api/config', methods=['POST'])
 def update_config():

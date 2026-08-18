@@ -12,6 +12,8 @@ from ml_models import MLTradingEnsemble, PricePredictionLSTM, SignalConfirmation
 from openai_market_analyzer import OpenAIMarketAnalyzer
 from coin_scanner import CoinScanner
 from enum import Enum
+from tradekit_adapter import TradeKitAdapter
+from tradekit_signals import signal_store
 
 # State machine states
 class TradingState(Enum):
@@ -157,6 +159,21 @@ class SimpleRSIStrategy:
         self.last_ai_confidence = None
         bot_logger.info(f"OpenAI enabled: {self.openai_enabled}")
         bot_logger.info(f"OpenAI analyzer enabled: {self.openai_analyzer.enabled}")
+        
+        # TradeKit Integration
+        self.tradekit_adapter = TradeKitAdapter(config)
+        self.tradekit_enabled = self.tradekit_adapter.enabled
+        bot_logger.info(f"TradeKit enabled: {self.tradekit_enabled}")
+        bot_logger.info(f"TradeKit status: {self.tradekit_adapter.get_status()}")
+
+        # Real TradeKit (trader.dev) live webhook signals - independent of the
+        # local indicator adapter above. Off by default: unless explicitly
+        # enabled, get_tradekit_live_signal_bias() always returns 0 and no
+        # existing trading behavior changes.
+        self.tradekit_live_signals_enabled = config.get('tradekit_live_signals', False)
+        self.tradekit_max_signal_age_seconds = config.get('tradekit_max_signal_age_seconds', 900)
+        self.tradekit_signal_bonus = config.get('tradekit_signal_bonus', 8)
+        bot_logger.info(f"TradeKit live signals enabled: {self.tradekit_live_signals_enabled}")
         
         # Try to load pre-trained ML models
         if self.ml_enabled:
@@ -724,6 +741,50 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"MACD calculation failed: {e}")
             return None, None, None
     
+    def calculate_enhanced_indicators_with_tradekit(self, ohlcv):
+        """
+        Calculate enhanced indicators using TradeKit if enabled.
+        Falls back to basic indicators if TradeKit is disabled.
+        """
+        if self.tradekit_enabled:
+            try:
+                enhanced = self.tradekit_adapter.calculate_enhanced_indicators(ohlcv)
+                if enhanced:
+                    bot_logger.info(f"TradeKit enhanced indicators calculated: {len(enhanced)} indicators")
+                    return enhanced
+            except Exception as e:
+                bot_logger.warning(f"TradeKit enhanced indicators failed: {e}, using fallback")
+        
+        # Fallback to basic indicators
+        return {}
+
+    def get_tradekit_live_signal_bias(self, direction):
+        """
+        Look up the latest real TradeKit webhook signal for this symbol and
+        return a setup-score bonus/penalty for the given direction ('long' or
+        'short'). Returns 0 (no effect) unless TRADEKIT_LIVE_SIGNALS is
+        enabled and a fresh matching/opposing signal exists. Never blocks or
+        places a trade by itself - Coinbase execution logic is unchanged.
+        """
+        if not self.tradekit_live_signals_enabled:
+            return 0
+
+        try:
+            signal = signal_store.get_latest(self.symbol, max_age_seconds=self.tradekit_max_signal_age_seconds)
+            if not signal or signal['signal_type'] != 'entry':
+                return 0
+
+            if signal['direction'] == direction:
+                bot_logger.info(f"TradeKit live signal agrees with {direction}: +{self.tradekit_signal_bonus}")
+                return self.tradekit_signal_bonus
+            elif signal['direction'] in ('long', 'short'):
+                bot_logger.info(f"TradeKit live signal opposes {direction}: -{self.tradekit_signal_bonus}")
+                return -self.tradekit_signal_bonus
+        except Exception as e:
+            bot_logger.warning(f"TradeKit live signal lookup failed: {e}")
+
+        return 0
+
     def calculate_momentum(self, prices, period):
         """Calculate momentum indicator"""
         try:
@@ -1436,7 +1497,7 @@ class SimpleRSIStrategy:
             return False, "Check error"
     
     def calculate_sol_setup_score(self, rsi, ema_short, ema_long, macd_bullish, price_near_lower, current_price, volume_confirmed, momentum_detected, near_resistance, liquidity_ok):
-        """Calculate SOL-specific setup score (100-point system)"""
+        """Calculate SOL-specific setup score (100-point system) with optional TradeKit enhancement"""
         if not self.is_sol_strategy:
             return 100
         
@@ -1488,6 +1549,41 @@ class SimpleRSIStrategy:
         else:
             score -= 10  # Heavy penalty for poor liquidity
         
+        # TradeKit enhancements (if enabled)
+        if self.tradekit_enabled:
+            try:
+                # Fetch order book for enhanced liquidity analysis
+                order_book = self.exchange.fetch_order_book(self.symbol, limit=10)
+                order_book_analysis = self.analyze_order_book_with_tradekit(order_book)
+                
+                if order_book_analysis:
+                    # Enhance liquidity score based on order book depth and spread quality
+                    spread_quality = order_book_analysis.get('spread_quality', 'fair')
+                    depth_quality = order_book_analysis.get('depth_quality', 'fair')
+                    
+                    if spread_quality == 'excellent' and depth_quality == 'excellent':
+                        score += 5  # Bonus for excellent liquidity
+                    elif spread_quality == 'poor' or depth_quality == 'poor':
+                        score -= 5  # Penalty for poor liquidity
+                
+                # Fetch OHLCV data for volatility analysis
+                ohlcv = self.exchange.fetch_ohlcv(self.symbol, timeframe='1h', limit=50)
+                volatility_analysis = self.analyze_volatility_with_tradekit(ohlcv, current_price)
+                
+                if volatility_analysis:
+                    volatility_suitability = volatility_analysis.get('volatility_suitability', 'unknown')
+                    if volatility_suitability == 'optimal':
+                        score += 3  # Bonus for optimal volatility
+                    elif volatility_suitability == 'poor':
+                        score -= 3  # Penalty for poor volatility
+                
+                bot_logger.info(f"TradeKit enhanced SOL setup score: {score}")
+                
+            except Exception as e:
+                bot_logger.warning(f"TradeKit enhancement failed for SOL setup score: {e}")
+
+        score += self.get_tradekit_live_signal_bias('long')
+
         return min(score, 100)  # Cap at 100
     
     def detect_sol_short_setup(self, current_price, ema_short, ema_long, rsi, macd_bearish):
@@ -1525,7 +1621,7 @@ class SimpleRSIStrategy:
             return False, "Detection error"
     
     def calculate_sol_short_setup_score(self, rsi, ema_short, ema_long, macd_bearish, price_near_upper, current_price, volume_confirmed, short_momentum_detected, near_support, liquidity_ok):
-        """Calculate SOL-specific short setup score (100-point system)"""
+        """Calculate SOL-specific short setup score (100-point system) with optional TradeKit enhancement"""
         if not self.is_sol_strategy:
             return 100
         
@@ -1579,6 +1675,41 @@ class SimpleRSIStrategy:
         else:
             score -= 10  # Heavy penalty for poor liquidity
         
+        # TradeKit enhancements (if enabled)
+        if self.tradekit_enabled:
+            try:
+                # Fetch order book for enhanced liquidity analysis
+                order_book = self.exchange.fetch_order_book(self.symbol, limit=10)
+                order_book_analysis = self.analyze_order_book_with_tradekit(order_book)
+                
+                if order_book_analysis:
+                    # Enhance liquidity score based on order book depth and spread quality
+                    spread_quality = order_book_analysis.get('spread_quality', 'fair')
+                    depth_quality = order_book_analysis.get('depth_quality', 'fair')
+                    
+                    if spread_quality == 'excellent' and depth_quality == 'excellent':
+                        score += 5  # Bonus for excellent liquidity
+                    elif spread_quality == 'poor' or depth_quality == 'poor':
+                        score -= 5  # Penalty for poor liquidity
+                
+                # Fetch OHLCV data for volatility analysis
+                ohlcv = self.exchange.fetch_ohlcv(self.symbol, timeframe='1h', limit=50)
+                volatility_analysis = self.analyze_volatility_with_tradekit(ohlcv, current_price)
+                
+                if volatility_analysis:
+                    volatility_suitability = volatility_analysis.get('volatility_suitability', 'unknown')
+                    if volatility_suitability == 'optimal':
+                        score += 3  # Bonus for optimal volatility
+                    elif volatility_suitability == 'poor':
+                        score -= 3  # Penalty for poor volatility
+                
+                bot_logger.info(f"TradeKit enhanced SOL short setup score: {score}")
+                
+            except Exception as e:
+                bot_logger.warning(f"TradeKit enhancement failed for SOL short setup score: {e}")
+
+        score += self.get_tradekit_live_signal_bias('short')
+
         return min(score, 100)  # Cap at 100
     
     def detect_breakout(self, current_price, support, resistance):
@@ -1599,16 +1730,39 @@ class SimpleRSIStrategy:
             return False, False
     
     def place_buy_order(self, current_price):
-        """Place buy order"""
+        """Place buy order with TradeKit trading cost filter"""
         position_size = self.calculate_position_size(current_price)
         trade_value = position_size * current_price
         
-        # Check minimum order size (Coinbase minimum is typically $1-2)
+        # Check minimum order size
         MIN_ORDER_SIZE = 2.0  # $2 minimum order size
         if trade_value < MIN_ORDER_SIZE:
-            bot_logger.warning(f"Order size ${trade_value:.2f} below minimum ${MIN_ORDER_SIZE:.2f} - insufficient capital for real trading")
-            bot_logger.warning(f"Current capital: ${self.current_capital:.2f} - deposit more funds or use paper trading")
+            bot_logger.warning(f"Order size ${trade_value:.2f} below minimum ${MIN_ORDER_SIZE:.2f}")
             return 0
+        
+        # TradeKit trading cost filter
+        if self.tradekit_enabled:
+            try:
+                # Calculate expected exit price based on take profit
+                expected_exit_price = current_price * (1 + self.take_profit_percent / 100)
+                
+                # Calculate comprehensive trading costs
+                costs = self.calculate_trading_costs_with_tradekit(
+                    current_price, expected_exit_price, position_size
+                )
+                
+                if costs:
+                    net_profit_pct = costs.get('net_profit_pct', 0)
+                    min_expected_profit = self.min_expected_net_profit if hasattr(self, 'min_expected_net_profit') else 0.2
+                    
+                    if net_profit_pct < min_expected_profit:
+                        bot_logger.warning(f"TradeKit cost filter: Net profit {net_profit_pct:.3f}% below minimum {min_expected_profit}% - Trade rejected")
+                        bot_logger.info(f"Cost breakdown: fees={costs.get('total_fees_pct', 0):.3f}%, spread={costs.get('spread_cost_pct', 0):.3f}%, slippage={costs.get('slippage_cost_pct', 0):.3f}%")
+                        return 0
+                    else:
+                        bot_logger.info(f"TradeKit cost filter: Net profit {net_profit_pct:.3f}% meets minimum - Trade approved")
+            except Exception as e:
+                bot_logger.warning(f"TradeKit cost filter failed: {e}, proceeding without cost filter")
         
         order_successful = False
         order_id = None
@@ -1702,7 +1856,7 @@ class SimpleRSIStrategy:
         return position_size
     
     def place_short_order(self, current_price):
-        """Place short order (sell borrowed asset)"""
+        """Place short order with TradeKit trading cost filter"""
         if not self.enable_short_trading:
             bot_logger.warning("Short trading is disabled - cannot place short order")
             return 0
@@ -1715,6 +1869,30 @@ class SimpleRSIStrategy:
         if trade_value < MIN_ORDER_SIZE:
             bot_logger.warning(f"Order size ${trade_value:.2f} below minimum ${MIN_ORDER_SIZE:.2f}")
             return 0
+        
+        # TradeKit trading cost filter
+        if self.tradekit_enabled:
+            try:
+                # Calculate expected exit price based on take profit (price goes down for short profit)
+                expected_exit_price = current_price * (1 - self.take_profit_percent / 100)
+                
+                # Calculate comprehensive trading costs
+                costs = self.calculate_trading_costs_with_tradekit(
+                    current_price, expected_exit_price, position_size
+                )
+                
+                if costs:
+                    net_profit_pct = costs.get('net_profit_pct', 0)
+                    min_expected_profit = self.min_expected_net_profit if hasattr(self, 'min_expected_net_profit') else 0.2
+                    
+                    if net_profit_pct < min_expected_profit:
+                        bot_logger.warning(f"TradeKit cost filter: Net profit {net_profit_pct:.3f}% below minimum {min_expected_profit}% - Short trade rejected")
+                        bot_logger.info(f"Cost breakdown: fees={costs.get('total_fees_pct', 0):.3f}%, spread={costs.get('spread_cost_pct', 0):.3f}%, slippage={costs.get('slippage_cost_pct', 0):.3f}%")
+                        return 0
+                    else:
+                        bot_logger.info(f"TradeKit cost filter: Net profit {net_profit_pct:.3f}% meets minimum - Short trade approved")
+            except Exception as e:
+                bot_logger.warning(f"TradeKit cost filter failed: {e}, proceeding without cost filter")
         
         order_successful = False
         order_id = None

@@ -19,3 +19,13 @@ joblib>=1.3.0
 
 # OpenAI Integration
 openai>=1.0.0
+
+# TradeKit Components - Technical Analysis (Optional - Python 3.10 compatible)
+# pandas-ta is not available for Python 3.10, TradeKit will use fallback indicators
+# tulipy>=0.3.0  # Optional - Fast C-based indicators
+
+# TradeKit Components - Backtesting (Optional - Python 3.10 compatible)
+# backtesting>=0.3.3  # Optional - Backtesting framework
+
+# TradeKit Components - Portfolio Analysis
+# pyfolio>=0.9.0  # Optional - Portfolio analysis

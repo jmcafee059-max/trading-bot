@@ -1,6 +1,7 @@
 """
 Backtesting Module for Trading Strategy Validation
 Tests trading strategies on historical data before live trading
+Includes TradeKit integration for enhanced backtesting capabilities
 """
 
 import pandas as pd
@@ -13,6 +14,17 @@ import json
 import os
 from dotenv import load_dotenv
 
+# TradeKit imports for enhanced backtesting
+try:
+    from backtesting import Backtest, Strategy
+    from backtesting.lib import crossover
+    BACKTESTING_AVAILABLE = True
+except ImportError:
+    BACKTESTING_AVAILABLE = False
+    logging.warning("backtesting library not available, TradeKit backtesting disabled")
+
+from tradekit_adapter import TradeKitAdapter
+
 # Load environment variables
 load_dotenv()
 
@@ -22,9 +34,9 @@ logger = logging.getLogger(__name__)
 
 
 class Backtester:
-    """Backtesting engine for trading strategies"""
+    """Backtesting engine for trading strategies with TradeKit integration"""
     
-    def __init__(self, exchange_id='coinbase', symbol='SOL-USDC', timeframe='1h'):
+    def __init__(self, exchange_id='coinbase', symbol='SOL-USDC', timeframe='1h', use_tradekit=False):
         """
         Initialize backtester
         
@@ -32,10 +44,27 @@ class Backtester:
             exchange_id: Exchange to use for historical data
             symbol: Trading pair to backtest
             timeframe: Timeframe for candles (1h, 4h, 1d, etc.)
+            use_tradekit: Enable TradeKit enhanced backtesting
         """
         self.exchange_id = exchange_id
         self.symbol = symbol
         self.timeframe = timeframe
+        self.use_tradekit = use_tradekit
+        
+        # Initialize TradeKit adapter if enabled
+        self.tradekit_adapter = None
+        if use_tradekit:
+            config = {
+                'USE_TRADEKIT': True,
+                'TRADEKIT_MIN_SCORE': 80,
+                'TRADEKIT_LIQUIDITY_FILTER': True,
+                'TRADEKIT_ORDERBOOK_ANALYSIS': True,
+                'TRADEKIT_VOLATILITY_ANALYSIS': True,
+                'TRADEKIT_DEBUG': False
+            }
+            self.tradekit_adapter = TradeKitAdapter(config)
+            logger.info("TradeKit adapter initialized for backtesting")
+        
         self.exchange = self._init_exchange()
         
     def _init_exchange(self):
@@ -150,7 +179,7 @@ class Backtester:
     
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate technical indicators for backtesting
+        Calculate technical indicators for backtesting with TradeKit enhancement
         
         Args:
             df: DataFrame with OHLCV data
@@ -158,29 +187,38 @@ class Backtester:
         Returns:
             DataFrame with added indicators
         """
-        # RSI
+        # Basic indicators
         df['rsi'] = self._calculate_rsi(df['close'], period=7)
-        
-        # EMAs
         df['ema_short'] = df['close'].ewm(span=9, adjust=False).mean()
         df['ema_long'] = df['close'].ewm(span=21, adjust=False).mean()
-        
-        # SMA
         df['sma'] = df['close'].rolling(window=50).mean()
-        
-        # MACD
         df['macd'] = df['close'].ewm(span=12, adjust=False).mean() - df['close'].ewm(span=26, adjust=False).mean()
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_histogram'] = df['macd'] - df['macd_signal']
-        
-        # Bollinger Bands
         df['bb_middle'] = df['close'].rolling(window=20).mean()
         df['bb_std'] = df['close'].rolling(window=20).std()
         df['bb_upper'] = df['bb_middle'] + (df['bb_std'] * 2)
         df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * 2)
-        
-        # ATR
         df['atr'] = self._calculate_atr(df)
+        
+        # TradeKit enhanced indicators
+        if self.use_tradekit and self.tradekit_adapter:
+            try:
+                # Convert DataFrame to OHLCV format for TradeKit
+                ohlcv = df.reset_index().values.tolist()
+                ohlcv = [[int(t.timestamp() * 1000), o, h, l, c, v] for t, o, h, l, c, v in ohlcv]
+                
+                enhanced_indicators = self.tradekit_adapter.calculate_enhanced_indicators(ohlcv)
+                
+                if enhanced_indicators:
+                    # Add TradeKit indicators to DataFrame
+                    for key, value in enhanced_indicators.items():
+                        if value is not None and not pd.isna(value):
+                            df[f'tradekit_{key}'] = value
+                    
+                    logger.info(f"Added {len(enhanced_indicators)} TradeKit indicators to backtest data")
+            except Exception as e:
+                logger.warning(f"TradeKit indicator calculation failed: {e}")
         
         return df
     
@@ -210,9 +248,10 @@ class Backtester:
     
     def run_backtest(self, df: pd.DataFrame, initial_capital: float = 1000.0,
                     capital_percentage: float = 0.8, take_profit_pct: float = 0.3,
-                    stop_loss_pct: float = 0.2, setup_score_threshold: float = 25.0) -> Dict:
+                    stop_loss_pct: float = 0.2, setup_score_threshold: float = 25.0,
+                    use_tradekit_cost_filter: bool = True) -> Dict:
         """
-        Run backtest simulation
+        Run backtest simulation with TradeKit integration
         
         Args:
             df: DataFrame with OHLCV and indicator data
@@ -221,6 +260,7 @@ class Backtester:
             take_profit_pct: Take profit percentage
             stop_loss_pct: Stop loss percentage
             setup_score_threshold: Minimum setup score to enter trade
+            use_tradekit_cost_filter: Use TradeKit cost filter for trade validation
             
         Returns:
             Dictionary with backtest results
@@ -253,12 +293,38 @@ class Backtester:
                     entry_price = current_price
                     trade_amount = capital * capital_percentage
                     position_size = trade_amount / current_price
+                    
+                    # TradeKit cost filter for long trades
+                    if use_tradekit_cost_filter and self.use_tradekit and self.tradekit_adapter:
+                        expected_exit_price = entry_price * (1 + take_profit_pct / 100)
+                        costs = self.tradekit_adapter.calculate_trading_costs(entry_price, expected_exit_price, position_size)
+                        if costs and not costs.get('profitable', True):
+                            logger.info(f"TradeKit cost filter rejected long trade at {entry_price}")
+                            position = None
+                            entry_price = None
+                            position_size = 0.0
+                            trade_amount = 0.0
+                            continue
+                    
                     capital -= trade_amount  # Deduct capital used for position
                 else:
                     position = 'short'
                     entry_price = current_price
                     trade_amount = capital * capital_percentage
                     position_size = trade_amount / current_price
+                    
+                    # TradeKit cost filter for short trades
+                    if use_tradekit_cost_filter and self.use_tradekit and self.tradekit_adapter:
+                        expected_exit_price = entry_price * (1 - take_profit_pct / 100)
+                        costs = self.tradekit_adapter.calculate_trading_costs(entry_price, expected_exit_price, position_size)
+                        if costs and not costs.get('profitable', True):
+                            logger.info(f"TradeKit cost filter rejected short trade at {entry_price}")
+                            position = None
+                            entry_price = None
+                            position_size = 0.0
+                            trade_amount = 0.0
+                            continue
+                    
                     capital -= trade_amount  # Deduct capital used for position (margin)
                 
                 trades.append({
@@ -267,7 +333,9 @@ class Backtester:
                     'entry_price': entry_price,
                     'position_size': position_size,
                     'trade_amount': trade_amount,
-                    'capital_at_entry': capital
+                    'capital_at_entry': capital,
+                    'setup_score': setup_score,
+                    'tradekit_filtered': use_tradekit_cost_filter and self.use_tradekit
                 })
             
             # Exit logic
@@ -359,10 +427,74 @@ class Backtester:
             'avg_profit_per_trade': avg_profit,
             'max_profit': max_profit,
             'max_loss': max_loss,
-            'trades': trades
+            'trades': trades,
+            'use_tradekit': self.use_tradekit,
+            'tradekit_cost_filter': use_tradekit_cost_filter
         }
         
         return results
+    
+    def run_comparative_backtest(self, df: pd.DataFrame, initial_capital: float = 1000.0,
+                                 capital_percentage: float = 0.8, take_profit_pct: float = 0.3,
+                                 stop_loss_pct: float = 0.2, setup_score_threshold: float = 25.0) -> Dict:
+        """
+        Run comparative backtest with and without TradeKit to measure performance impact
+        
+        Args:
+            df: DataFrame with OHLCV and indicator data
+            initial_capital: Starting capital for simulation
+            capital_percentage: Percentage of capital to use per trade
+            take_profit_pct: Take profit percentage
+            stop_loss_pct: Stop loss percentage
+            setup_score_threshold: Minimum setup score to enter trade
+            
+        Returns:
+            Dictionary with comparative results
+        """
+        logger.info("Running comparative backtest: With TradeKit vs Without TradeKit")
+        
+        # Run backtest without TradeKit
+        backtester_without = Backtester(self.exchange_id, self.symbol, self.timeframe, use_tradekit=False)
+        df_without = df.copy()
+        df_without = backtester_without.calculate_indicators(df_without)
+        results_without = backtester_without.run_backtest(
+            df_without, initial_capital, capital_percentage, take_profit_pct,
+            stop_loss_pct, setup_score_threshold, use_tradekit_cost_filter=False
+        )
+        
+        # Run backtest with TradeKit
+        backtester_with = Backtester(self.exchange_id, self.symbol, self.timeframe, use_tradekit=True)
+        df_with = df.copy()
+        df_with = backtester_with.calculate_indicators(df_with)
+        results_with = backtester_with.run_backtest(
+            df_with, initial_capital, capital_percentage, take_profit_pct,
+            stop_loss_pct, setup_score_threshold, use_tradekit_cost_filter=True
+        )
+        
+        # Calculate performance difference
+        return_diff = results_with['total_return_pct'] - results_without['total_return_pct']
+        profit_diff = results_with['total_profit'] - results_without['total_profit']
+        win_rate_diff = results_with['win_rate'] - results_without['win_rate']
+        trades_diff = results_with['total_trades'] - results_without['total_trades']
+        
+        comparative_results = {
+            'without_tradekit': results_without,
+            'with_tradekit': results_with,
+            'performance_difference': {
+                'return_pct_diff': return_diff,
+                'profit_diff': profit_diff,
+                'win_rate_diff': win_rate_diff,
+                'trades_diff': trades_diff
+            },
+            'tradekit_improvement': return_diff > 0 and win_rate_diff >= 0
+        }
+        
+        logger.info(f"Comparative backtest complete:")
+        logger.info(f"  Without TradeKit: {results_without['total_return_pct']:.2f}% return, {results_without['total_trades']} trades")
+        logger.info(f"  With TradeKit: {results_with['total_return_pct']:.2f}% return, {results_with['total_trades']} trades")
+        logger.info(f"  Difference: {return_diff:+.2f}% return, {trades_diff:+d} trades")
+        
+        return comparative_results
     
     def _calculate_setup_score(self, row: pd.Series, volume_sma: float = None) -> float:
         """

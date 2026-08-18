@@ -18,7 +18,7 @@ def train_models():
     train_logger.info("Starting ML model training...")
     
     # Load training data
-    data_file = 'ml_data/training_data_BTC_USDC.csv'
+    data_file = 'ml_data/training_data_DOGE_USDC.csv'
     if not os.path.exists(data_file):
         train_logger.error(f"Training data not found: {data_file}")
         return False

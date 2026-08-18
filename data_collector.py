@@ -304,8 +304,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
     # Test data collection
-    pipeline = TrainingPipeline(symbol='BTC-USDC')
-    results = pipeline.run_training_pipeline(days=30)  # Collect 30 days for better training
+    pipeline = TrainingPipeline(symbol='DOGE-USDC')
+    results = pipeline.run_training_pipeline(days=730)  # Collect 2 years (max available for hourly data)
     
     if results:
         print("Training pipeline completed successfully!")
