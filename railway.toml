@@ -13,7 +13,9 @@ PAPER_TRADING = "true"
 PAPER_TRADING_BALANCE = "100"
 
 CAPITAL_PERCENTAGE = "40"
-VOLATILITY_MULTIPLIER = "10"
+# Cosmetic only - only ever appears in log lines ("Vol: Xx"), not read by any
+# position sizing or TP/SL calculation in simple_strategy_v2.py.
+VOLATILITY_MULTIPLIER = "5"
 # Switched to ATOM-USDC. Chosen over NEAR/INJ specifically because it
 # scores well on return, alpha vs buy-and-hold, win rate, AND robustness
 # simultaneously - NEAR/INJ's big backtest numbers were mostly riding a
