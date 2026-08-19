@@ -113,7 +113,13 @@ THIRD_TP_PERCENT = "0.40"
 
 USE_TRAILING_STOP = "true"
 TRAILING_STOP_ACTIVATION_PCT = "0.15"
-TRAILING_STOP_DISTANCE_PCT = "0.10"
+# Widened from 0.10 - at that distance the trailing stop sits almost on top
+# of price once activated, and it's checked before take-profit in
+# evaluate_sell_signals. Trade #2 on 2026-08-19 hit +1.66% profit (past the
+# 1.5% TP target) but neither the trailing stop nor TP fired, and the user
+# had to close it manually at only +1.21%. 0.5% gives normal 1h-candle noise
+# room to breathe without preempting the TP exit.
+TRAILING_STOP_DISTANCE_PCT = "0.50"
 USE_BREAKEVEN = "true"
 BREAKEVEN_ACTIVATION_PCT = "0.20"
 BREAKEVEN_OFFSET_PCT = "0.02"
