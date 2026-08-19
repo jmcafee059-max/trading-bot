@@ -3311,7 +3311,20 @@ class SimpleRSIStrategy:
             elif "LOW_VOL" in market_regime:
                 dynamic_tp *= 0.8  # Lower targets in calm markets
             dynamic_sl = self.stop_loss_pct
-        
+
+        # Diagnostic for the "profit passed TP but no auto-sell" reports -
+        # exposes the exact thresholds each check saw this tick, since the
+        # "Position Check" log line elsewhere only prints the raw config
+        # take_profit_pct, not this function's regime-adjusted dynamic_tp
+        # or the trailing stop level actually being compared against.
+        bot_logger.info(
+            f"SELL EVAL: profit={profit_pct:.3f}% dynamic_tp={dynamic_tp:.3f}% "
+            f"dynamic_sl={dynamic_sl:.3f}% price={current_price:.4f} "
+            f"long_trailing_stop={self.trailing_stop_price} short_trailing_stop={self.short_trailing_stop_price} "
+            f"breakeven_triggered={self.breakeven_triggered} short_breakeven_triggered={self.short_breakeven_triggered} "
+            f"regime={market_regime}"
+        )
+
         # Take profit with dynamic adjustment
         if profit_pct >= dynamic_tp - 0.01:  # Larger tolerance for floating point precision
             should_sell = True
