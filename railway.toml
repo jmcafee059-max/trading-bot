@@ -14,25 +14,24 @@ PAPER_TRADING_BALANCE = "100"
 
 CAPITAL_PERCENTAGE = "40"
 VOLATILITY_MULTIPLIER = "10"
-# Switched to NEAR-USDC. Note from the backtest: NEAR's strategy return
-# (+44.56% over ~4mo) was mostly riding a genuine +134% buy-and-hold rally
-# in that window, not a proven repeatable edge the way SOL's +9.22% was
-# (achieved while SOL itself fell ~10%) - see conversation for the full
-# comparison. Paper trading this is exactly how to find out if it holds up
-# going forward.
-SYMBOL = "NEAR-USDC"
+# Switched to ATOM-USDC. Chosen over NEAR/INJ specifically because it
+# scores well on return, alpha vs buy-and-hold, win rate, AND robustness
+# simultaneously - NEAR/INJ's big backtest numbers were mostly riding a
+# real buy-and-hold rally in that window (negative alpha), not a
+# repeatable edge. ATOM's edge showed up while ATOM itself fell ~4.7%.
+SYMBOL = "ATOM-USDC"
 STARTING_CAPITAL = "auto"
 # Best combo from a 96-combination sweep against ~4 months of real 1h
-# NEAR-USDC history: TP=1.5/SL=2.0/score>=25, +44.56% return, 253 trades,
-# 59.3% win rate (63/64 qualifying combos were profitable - a robust
-# result across parameter choices, not a one-off fluke). Replaces the
-# previous SOL-tuned 0.5/0.5 override.
+# ATOM-USDC history: TP=1.5/SL=1.0/score>=25 -> +15.80% return, 207 trades,
+# 45.4% win rate, alpha +20.47pts vs buy-and-hold, and 50/64 qualifying
+# combos profitable (78% - the most robust result of every pair tested
+# this session, including SOL/ETH/UNI/XRP/NEAR/INJ and 12 others).
 TAKE_PROFIT_PERCENT = "1.5"
 TIMEFRAME = "1h"
 RSI_PERIOD = "7"
 RSI_OVERBOUGHT = "70"
 RSI_OVERSOLD = "30"
-STOP_LOSS_PERCENT = "2.0"
+STOP_LOSS_PERCENT = "1.0"
 EMA_SHORT = "9"
 EMA_LONG = "21"
 SMA_PERIOD = "50"
@@ -70,13 +69,10 @@ ENABLE_SHORT_TRADING = "true"
 
 USE_SETUP_SCORE = "true"
 # Unlike SOL/ETH (which use their own hardcoded setup-score gates that
-# ignore this value entirely - see the SOL exit-logic fix earlier), NEAR
+# ignore this value entirely - see the SOL exit-logic fix earlier), ATOM
 # has no such special case, so this generic gate genuinely governs its
-# entries. Restored to the sweep-validated 25 (96-combination sweep vs
-# ~4mo real NEAR-USDC history: TP=1.5/SL=2.0/score>=25 -> +44.56% return,
-# 253 trades, 59.3% win rate, 63/64 qualifying combos profitable). Was
-# briefly lowered to 15 to trade more often, but that threshold was never
-# validated and likely hurt more than it helped.
+# entries. Matches ATOM's sweep-winning combo (score>=25) - see
+# TAKE_PROFIT_PERCENT/STOP_LOSS_PERCENT comments below for the full result.
 MIN_SETUP_SCORE = "25"
 
 USE_BTC_WEATHER = "true"
