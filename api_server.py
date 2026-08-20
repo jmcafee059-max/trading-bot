@@ -307,32 +307,64 @@ def start_bot():
         def run_bot():
             global bot_running
             iteration_count = 0
+            consecutive_errors = 0
+            error_alert_sent = False
+            stop_reason = 'stopped externally'
             start_time = time.time()
             max_runtime = bot_config.get('max_runtime_hours', 24) * 3600  # Convert to seconds
-            
+
             while bot_running:
                 # Check if max runtime exceeded
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= max_runtime:
                     logging.info(f"Max runtime of {bot_config.get('max_runtime_hours', 24)} hours reached. Stopping bot.")
                     bot_running = False
+                    stop_reason = f"max runtime ({bot_config.get('max_runtime_hours', 24)}h) reached"
                     break
-                
+
                 try:
                     iteration_count += 1
                     ticker = exchange.fetch_ticker(bot_config['symbol'])
                     current_price = ticker['last']
                     logging.info(f"Bot loop #{iteration_count}: Fetched price ${current_price:.2f} for {bot_config['symbol']} (Runtime: {elapsed_time/3600:.1f}h/{max_runtime/3600:.0f}h)")
                     strategy_instance.handle_trade_event(current_price)
-                    
+
+                    if consecutive_errors > 0:
+                        consecutive_errors = 0
+                        error_alert_sent = False
+
                     if iteration_count % 5 == 0:
                         save_bot_state()
-                    
+
                     time.sleep(30)
                     logging.info(f"Bot loop #{iteration_count}: Waiting 30 seconds before next iteration...")
                 except Exception as e:
                     logging.error(f"Error in bot loop #{iteration_count}: {e}")
+                    consecutive_errors += 1
+                    # One alert per error streak, not one per retry - repeated
+                    # failures (API down, bad credentials, etc.) are a "look
+                    # at this" signal distinct from a single transient blip.
+                    if consecutive_errors >= 3 and not error_alert_sent and strategy_instance:
+                        error_alert_sent = True
+                        strategy_instance.send_phone_notification(
+                            f"{bot_config.get('symbol', 'Bot')} - repeated errors",
+                            f"{consecutive_errors} consecutive loop errors. Latest: {e}",
+                            priority='high'
+                        )
                     time.sleep(15)
+
+            # Loop exited - notify, with extra urgency if a real position is
+            # currently open and about to go unmonitored (no more TP/SL/
+            # trailing-stop checks will run until the bot is restarted).
+            if strategy_instance:
+                has_position = bool(strategy_instance.long_position or strategy_instance.short_position)
+                strategy_instance.send_phone_notification(
+                    f"{bot_config.get('symbol', 'Bot')} - bot stopped"
+                    + (" - POSITION STILL OPEN" if has_position else ""),
+                    f"Reason: {stop_reason} | Open position: {'yes - unmonitored until restarted' if has_position else 'none'} "
+                    f"| Capital: ${strategy_instance.current_capital:.2f}",
+                    priority='urgent' if has_position else 'high'
+                )
         
         bot_thread = threading.Thread(target=run_bot, daemon=True)
         bot_thread.start()
