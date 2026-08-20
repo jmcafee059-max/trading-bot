@@ -6,6 +6,7 @@ import numpy as np
 import os
 import json
 import time
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 from ml_models import MLTradingEnsemble, PricePredictionLSTM, SignalConfirmationRF, PatternRecognitionNN
@@ -53,6 +54,10 @@ class SimpleRSIStrategy:
         # real exchange connection.
         self.paper_trading = config.get('paper_trading', False)
         bot_logger.info(f"Paper trading: {self.paper_trading}")
+
+        # Phone push notifications via ntfy.sh on trade open/close - see
+        # send_phone_notification. Empty topic disables it entirely.
+        self.ntfy_topic = config.get('ntfy_topic', '')
 
         # Coin scanner integration
         self.enable_coin_scanner = config.get('enable_coin_scanner', False)
@@ -1739,6 +1744,25 @@ class SimpleRSIStrategy:
             bot_logger.warning(f"Breakout detection failed: {e}")
             return False, False
     
+    def send_phone_notification(self, title, message, priority='default'):
+        """
+        Push a phone notification via ntfy.sh (see NTFY_TOPIC config) on
+        trade open/close. Best-effort and non-blocking in intent - a failed
+        or slow notification must never interrupt trading, so this always
+        catches its own exceptions and uses a short timeout.
+        """
+        if not self.ntfy_topic:
+            return
+        try:
+            requests.post(
+                f"https://ntfy.sh/{self.ntfy_topic}",
+                data=message.encode('utf-8'),
+                headers={"Title": title, "Priority": priority},
+                timeout=5,
+            )
+        except Exception as e:
+            bot_logger.warning(f"Failed to send phone notification: {e}")
+
     def place_buy_order(self, current_price):
         """Place buy order with TradeKit trading cost filter"""
         position_size = self.calculate_position_size(current_price)
@@ -1866,7 +1890,11 @@ class SimpleRSIStrategy:
             self.partial_tps_taken = []  # Reset partial TPs for new position
         
         bot_logger.info(f"[BUY #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Volatility: {self.VOLATILITY_MULTIPLIER}x | Real: {order_successful}")
-        
+        self.send_phone_notification(
+            f"{self.symbol} LONG opened",
+            f"Entry ${current_price:.4f} | Size {position_size:.6f} | Value ${trade_value:.2f} | Capital ${self.current_capital:.2f}"
+        )
+
         return position_size
     
     def place_short_order(self, current_price):
@@ -1964,6 +1992,10 @@ class SimpleRSIStrategy:
             self.short_breakeven_triggered = False
             
             bot_logger.info(f"[SHORT #{self.trade_count + 1}] {self.currency_symbol}{current_price:.2f} | Size: {position_size:.6f} | Value: ${trade_value:.2f} | Real: {order_successful}")
+            self.send_phone_notification(
+                f"{self.symbol} SHORT opened",
+                f"Entry ${current_price:.4f} | Size {position_size:.6f} | Value ${trade_value:.2f} | Capital ${self.current_capital:.2f}"
+            )
         else:
             bot_logger.warning(f"Short order failed - not setting position")
             return 0
@@ -2049,7 +2081,12 @@ class SimpleRSIStrategy:
         self.trade_history.append(trade_record)
         
         bot_logger.info(f"[SELL #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} | Capital: ${self.current_capital:.2f}")
-        
+        self.send_phone_notification(
+            f"{self.symbol} LONG closed {'✅' if profit_amount >= 0 else '❌'}",
+            f"Exit ${current_price:.4f} | P&L ${profit_amount:.2f} ({profit_pct:+.2f}%) | {reason} | Capital ${self.current_capital:.2f}",
+            priority='high' if profit_amount < 0 else 'default'
+        )
+
         # Reset long position only (keep short position if open)
         self.long_position = None
         self.last_buy_price = None
@@ -2151,7 +2188,12 @@ class SimpleRSIStrategy:
         self.trade_history.append(trade_record)
         
         bot_logger.info(f"[COVER #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} | Capital: ${self.current_capital:.2f}")
-        
+        self.send_phone_notification(
+            f"{self.symbol} SHORT closed {'✅' if profit_amount >= 0 else '❌'}",
+            f"Exit ${current_price:.4f} | P&L ${profit_amount:.2f} ({profit_pct:+.2f}%) | {reason} | Capital ${self.current_capital:.2f}",
+            priority='high' if profit_amount < 0 else 'default'
+        )
+
         # Reset short position only (keep long position if open)
         self.short_position = None
         self.last_short_price = None
@@ -2206,7 +2248,12 @@ class SimpleRSIStrategy:
         self.trade_history.append(trade_record)
         
         bot_logger.info(f"[SELL #{self.trade_count}] {self.currency_symbol}{current_price:.2f} | Profit: ${profit_amount:.2f} ({profit_pct:+.2f}%) | Reason: {reason} (Paper Trading) | Capital: ${self.current_capital:.2f}")
-        
+        self.send_phone_notification(
+            f"{self.symbol} LONG closed {'✅' if profit_amount >= 0 else '❌'} (paper)",
+            f"Exit ${current_price:.4f} | P&L ${profit_amount:.2f} ({profit_pct:+.2f}%) | {reason} | Capital ${self.current_capital:.2f}",
+            priority='high' if profit_amount < 0 else 'default'
+        )
+
         # Reset long position only (keep short position if open)
         self.long_position = None
         self.last_buy_price = None

@@ -12,6 +12,13 @@ startCommand = "python api_server.py"
 PAPER_TRADING = "true"
 PAPER_TRADING_BALANCE = "100"
 
+# Phone push notification on every trade open/close via ntfy.sh (free, no
+# account needed) - see send_phone_notification in simple_strategy_v2.py.
+# Install the ntfy app and subscribe to this exact topic name to receive
+# them. Not a secret in the security sense, but keep the random suffix so
+# random ntfy.sh users don't stumble onto your trade notifications.
+NTFY_TOPIC = "jmcafee-atombot-x7k2p9"
+
 CAPITAL_PERCENTAGE = "40"
 # Cosmetic only - only ever appears in log lines ("Vol: Xx"), not read by any
 # position sizing or TP/SL calculation in simple_strategy_v2.py.

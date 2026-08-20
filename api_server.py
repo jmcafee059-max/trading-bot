@@ -104,6 +104,9 @@ bot_config = {
     # from the real Coinbase account.
     'paper_trading': os.getenv('PAPER_TRADING', 'false').lower() == 'true',
     'paper_trading_balance': float(os.getenv('PAPER_TRADING_BALANCE', '100')),
+    # Phone push notifications via ntfy.sh on trade open/close - see
+    # send_phone_notification in simple_strategy_v2.py. Empty disables it.
+    'ntfy_topic': os.getenv('NTFY_TOPIC', ''),
     # These were previously never passed through, so USE_TRAILING_STOP /
     # USE_BREAKEVEN env vars had no effect - the strategy always fell back to
     # its own hardcoded default (True) regardless of what was configured.
